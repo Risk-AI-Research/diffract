@@ -62,10 +62,10 @@ def load_session(param_analysis, agg_analysis, config_path: Path = Paths.CONFIG_
             "gate": 6,
             "fc2": 7,
         }
-        
+
         other_meta = {
             'param': f"#{int_mapping[OLMO_WEIGHTS_MAPPING[pattern]]}-{OLMO_WEIGHTS_MAPPING[pattern]}",
-            'layer_id': f'{int(key.split(".")[5]):02d}',
+            'layer_id': f'{int(key.split(".")[2]):02d}',
         }
         
         if ".head" in key:
