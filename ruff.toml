@@ -1,0 +1,284 @@
+# Ruff configuration for Python 3.12+ projects
+# Comprehensive linting and formatting rules for production code
+
+# Target Python 3.12+ (inferred from pyproject.toml requires-python)
+target-version = "py312"
+
+# Same as Black default, but configurable
+line-length = 88
+indent-width = 4
+
+# Source code directories
+src = ["src"]
+
+# Files to exclude from linting
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "docs/conf.py",
+]
+
+[lint]
+# Comprehensive rule selection for production Python code
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "YTT",  # flake8-2020
+    "ANN",  # flake8-annotations
+    "ASYNC", # flake8-async
+    "S",    # flake8-bandit (security)
+    "BLE",  # flake8-blind-except
+    "FBT",  # flake8-boolean-trap
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "COM",  # flake8-commas
+    "CPY",  # flake8-copyright
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez
+    "T10",  # flake8-debugger
+    "DJ",   # flake8-django
+    "EM",   # flake8-errmsg
+    "EXE",  # flake8-executable
+    "FA",   # flake8-future-annotations
+    "ISC",  # flake8-implicit-str-concat
+    "ICN",  # flake8-import-conventions
+    "G",    # flake8-logging-format
+    "INP",  # flake8-no-pep420
+    "PIE",  # flake8-pie
+    "T20",  # flake8-print
+    "PYI",  # flake8-pyi
+    "PT",   # flake8-pytest-style
+    "Q",    # flake8-quotes
+    "RSE",  # flake8-raise
+    "RET",  # flake8-return
+    "SLF",  # flake8-self
+    "SLOT", # flake8-slots
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "TCH",  # flake8-type-checking
+    "INT",  # flake8-gettext
+    "ARG",  # flake8-unused-arguments
+    "PTH",  # flake8-use-pathlib
+    "TD",   # flake8-todos
+    "FIX",  # flake8-fixme
+    "ERA",  # eradicate
+    "PD",   # pandas-vet
+    "PGH",  # pygrep-hooks
+    "PL",   # Pylint
+    "TRY",  # tryceratops
+    "FLY",  # flynt
+    "NPY",  # NumPy-specific rules
+    "AIR",  # Airflow
+    "PERF", # Perflint
+    "FURB", # refurb
+    "LOG",  # flake8-logging
+    "RUF",  # Ruff-specific rules
+]
+
+# Rules to ignore (with justification)
+ignore = [
+    # Documentation
+    "D100",   # Missing docstring in public module
+    "D104",   # Missing docstring in public package
+    "D107",   # Missing docstring in __init__
+    "D203",   # 1 blank line required before class docstring (conflicts with D211)
+    "D213",   # Multi-line docstring summary should start at the second line (conflicts with D212)
+
+    # Annotations
+    "ANN101", # Missing type annotation for self in method
+    "ANN102", # Missing type annotation for cls in classmethod
+    "ANN401", # Dynamically typed expressions (Any) are disallowed
+
+    # Style preferences
+    "C408",   # Unnecessary `dict()` call (often used for readability with external APIs)
+    "COM812", # Missing trailing comma (handled by formatter)
+    "ISC001", # Implicitly concatenated string literals on one line (conflicts with formatter)
+
+    # Type-checking import rules (too noisy for this codebase)
+    "TC001",  # Move application import into type-checking block
+    "TC003",  # Move standard library import into type-checking block
+
+    # Exception message style (prefer readability over ceremony)
+    "EM101",  # Raw string in exception
+    "EM102",  # f-string in exception
+
+    # Tryceratops message rules (too strict / low signal)
+    "TRY003", # Avoid long messages outside the exception class
+
+    # Security (context-dependent)
+    "S101",   # Use of assert detected (acceptable in tests)
+    "S311",   # Standard pseudo-random generators are not suitable for cryptographic purposes
+    "S608",   # Possible SQL injection vector (false positives in internal SQL strings)
+
+    # Performance (often premature optimization)
+    "PERF203", # `try`-`except` within a loop incurs performance overhead
+
+    # Too restrictive for research/ML code
+    "PLR0913", # Too many arguments to function call
+    "PLR0915", # Too many statements
+    "C901",    # Function is too complex
+    "PLR0912", # Too many branches
+
+    # Pandas-specific (may not apply)
+    "PD901",   # `df` is a bad variable name
+
+    # Others
+    "PLC0415",
+    "E402",
+    "FBT001",
+    "FBT002",
+    "FBT003",
+]
+
+# Allow auto-fixing for all enabled rules
+fixable = ["ALL"]
+
+# Rules that should never be auto-fixed
+unfixable = [
+    "F401",   # Unused imports (might be intentional)
+    "F841",   # Unused variables (might be intentional)
+    "ERA001", # Commented out code (might be intentional)
+]
+
+# Allow unused variables when underscore-prefixed
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# Per-file ignores
+[lint.per-file-ignores]
+"__init__.py" = [
+    "F401",   # Unused import (common in __init__.py)
+    "F403",   # Star imports
+    "D104",   # Missing docstring in public package
+]
+"tests/*" = [
+    "S101",   # Use of assert
+    "D",      # Docstring requirements
+    "ANN",    # Type annotations
+    "PLR0913", # Too many arguments
+    "PLR0915", # Too many statements
+    "ARG001", # Unused function argument
+    "FBT001", # Boolean positional argument
+    "PT011",  # pytest.raises() is too broad
+]
+"notebooks/*" = [
+    "D",      # Docstring requirements
+    "T20",    # Print statements
+    "ANN",    # Type annotations
+    "E402",   # Module level import not at top
+    "F401",   # Unused imports
+    "S101",   # Use of assert
+]
+"examples/*" = [
+    "D",      # Docstring requirements
+    "T20",    # Print statements
+    "INP001", # Implicit namespace package
+]
+"scripts/*" = [
+    "T20",    # Print statements
+    "INP001", # Implicit namespace package
+]
+"docs/*" = [
+    "D",      # Docstring requirements
+    "INP001", # Implicit namespace package
+    "A001",   # Variable shadows builtin
+]
+
+# Pylint configuration
+[lint.pylint]
+max-args = 8
+max-branches = 15
+max-returns = 8
+max-statements = 60
+
+# McCabe complexity
+[lint.mccabe]
+max-complexity = 12
+
+# flake8-annotations
+[lint.flake8-annotations]
+mypy-init-return = true
+suppress-dummy-args = true
+
+# flake8-bandit
+[lint.flake8-bandit]
+check-typed-exception = true
+hardcoded-tmp-directory = ["/tmp", "/var/tmp", "/dev/shm"]
+
+# flake8-bugbear
+[lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]
+
+# flake8-import-conventions
+[lint.flake8-import-conventions]
+[lint.flake8-import-conventions.aliases]
+numpy = "np"
+pandas = "pd"
+matplotlib = "mpl"
+"matplotlib.pyplot" = "plt"
+seaborn = "sns"
+torch = "torch"
+tensorflow = "tf"
+"tensorflow.keras" = "keras"
+
+# flake8-pytest-style
+[lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+# flake8-quotes
+[lint.flake8-quotes]
+inline-quotes = "double"
+multiline-quotes = "double"
+
+# flake8-tidy-imports
+[lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+# isort
+[lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = ["diffract", "netinspect"]
+split-on-trailing-comma = true
+
+# pydocstyle
+[lint.pydocstyle]
+convention = "google"
+
+[format]
+# Formatter configuration (Black-compatible)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"

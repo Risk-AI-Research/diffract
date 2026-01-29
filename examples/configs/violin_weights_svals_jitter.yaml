@@ -1,0 +1,30 @@
+plot:
+  _target_: diffract.viz.plots.configurer.UpdateFigure
+  plot:
+    _target_: diffract.viz.plots.violin.ViolinPlot
+    field: weights_svals
+    title: "weights_svals violins + custom jitter"
+    group_by: model_id
+    color_by: model_id
+
+    # violin styling
+    side: positive
+    points: false
+    box_visible: true
+    meanline_visible: true
+
+    # jitter overlay
+    jitter: true
+    jitter_width: 0.12
+    jitter_offset: -0.25
+    jitter_seed: 42
+    jitter_density_scale: true
+    jitter_marker_size: 3
+    jitter_opacity: 0.6
+    jitter_color_field: weights_svals
+    jitter_colorscale: Turbo
+    jitter_show_colorbar: true
+
+  layout:
+    width: 800
+    height: 400

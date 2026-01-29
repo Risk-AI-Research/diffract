@@ -1,0 +1,40 @@
+/* Minimal custom styles for Furo theme */
+
+/* Furo already has excellent defaults, we just tweak a few things */
+
+/* Slightly wider content for better readability */
+.content {
+  max-width: 60rem;
+}
+
+/* Better spacing for lists */
+.content li {
+  margin-bottom: 0.5rem;
+}
+
+/* API documentation spacing */
+dl.py {
+  margin-bottom: 2rem;
+}
+
+/* Field lists (parameters, returns) */
+dl.field-list dd {
+  margin-left: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Code blocks line height */
+pre {
+  line-height: 1.6;
+}
+
+/* Tables: full width and consistent styling */
+.content table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.content table th,
+.content table td {
+  word-wrap: break-word;
+}

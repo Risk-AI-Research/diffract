@@ -1,0 +1,57 @@
+# Use with: session.draw(plot, theme_path="path/to/theme_example.yaml")
+
+width: 800
+height: 400
+
+# Fonts
+font_family: "Times New Roman"
+title_font_size: 16
+label_font_size: 14
+tick_font_size: 12
+
+# Colors
+background_color: "white"
+paper_bgcolor: "white"
+grid_color: "lightgrey"
+border_color: "black"
+
+# Legend
+legend_bgcolor: "rgba(255,255,255,0.9)"
+legend_border_color: "gray"
+legend_border_width: 1
+legend_font_size: 12
+
+# Axes
+show_borders: true
+show_x_grid: true
+show_y_grid: true
+mirror_axes: true
+
+# Margins
+margin:
+  l: 80
+  r: 40
+  t: 60
+  b: 80
+
+# Colormaps
+discrete_colormap:
+  - "navy"
+  - "crimson"
+  - "green"
+  - "chocolate"
+  - "orange"
+  - "violet"
+  - "purple"
+  - "blue"
+  - "grey"
+
+# Marker symbols
+marker_symbols:
+  - "circle"
+  - "square"
+  - "triangle-up"
+  - "diamond"
+  - "cross"
+  - "x"
+  - "star"

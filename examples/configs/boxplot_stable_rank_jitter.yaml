@@ -1,0 +1,27 @@
+plot:
+  _target_: diffract.viz.plots.configurer.UpdateFigure
+  plot:
+    _target_: diffract.viz.plots.scalar.BoxPlot
+    field: stable_rank
+    title: "stable_rank boxplot + jitter (colored by frob_norm)"
+    group_by: model_id
+    color_by: model_id
+
+    # show only box; jitter is drawn as separate scatter layer
+    boxpoints: false
+
+    # jitter overlay
+    jitter: true
+    jitter_width: 0.12
+    jitter_offset: -0.5
+    jitter_seed: 42
+    jitter_density_scale: true
+    jitter_marker_size: 5
+    jitter_opacity: 0.6
+    jitter_color_field: frob_norm
+    jitter_colorscale: Turbo
+    jitter_show_colorbar: true
+
+  layout:
+    width: 800
+    height: 400

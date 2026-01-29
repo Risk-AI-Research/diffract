@@ -1,0 +1,35 @@
+plot:
+  _target_: diffract.viz.plots.configurer.UpdateFigure
+  plot:
+    _target_: diffract.viz.plots.subplots.GridPlot
+    make_subplots_kwargs:
+      rows: 1
+      cols: 2
+      shared_yaxes: false
+      shared_xaxes: false
+      horizontal_spacing: 0.08
+    subplots:
+      - _target_: diffract.viz.plots.subplots.SubplotSpec
+        row: 1
+        col: 1
+        title: "frob_norm"
+        plot:
+          _target_: diffract.viz.plots.scalar.BoxPlot
+          field: frob_norm
+          group_by: model_id
+          color_by: model_id
+      - _target_: diffract.viz.plots.subplots.SubplotSpec
+        row: 1
+        col: 2
+        title: "stable_rank"
+        plot:
+          _target_: diffract.viz.plots.scalar.BoxPlot
+          field: stable_rank
+          group_by: model_id
+          color_by: model_id
+
+config:
+  layout:
+    title: "Example grid"
+    width: 800
+    height: 400
