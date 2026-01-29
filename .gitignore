@@ -141,9 +141,6 @@ dmypy.json
 
 # JetBrains
 .idea/
-images/
-model_checkpoints/
-notebooks/
 
 # Data & Models
 *.h5

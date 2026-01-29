@@ -1,0 +1,17 @@
+x_metric: ???
+y_metric: ???
+
+plot:
+  _target_: diffract.viz.plots.configurer.UpdateFigure
+  layout:
+    width: 600
+    height: 600
+  plot:
+     _target_: diffract.viz.plots.scatter.ScatterPlot
+     x_field: ${x_metric}
+     y_field: ${y_metric}
+     group_by: model_id
+     color_by: model_id
+     marker_by: model_id
+     parameter_names:
+      - re:.*(q|k|v|o)_proj_head.*

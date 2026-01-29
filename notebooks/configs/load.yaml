@@ -1,0 +1,32 @@
+# @package _global_
+
+diffract_config_path: ./configs/hybrid.ini
+
+experiments_dirs:
+  - ./model_checkpoints
+  
+add_model_agg:
+  - - olmo_step10k
+    - olmo_step100k
+        
+ckpt_collector:
+  _target_: notebooks_src.load_checkpoints.CkptCollector
+  _partial_: true
+  ckpt_filter: null
+  ckpt_processor: ${ckpt_processor}
+
+ckpt_processor:
+  _target_: notebooks_src.load_checkpoints.CkptProcessor
+  handlers:
+    - _target_: notebooks_src.utils.remap_handler_helper
+      _partial_: true
+      _args_:
+        - _partial_: true
+          _target_: notebooks_src.utils.remap_olmo_state_dict
+  ckpt_filters:
+    - _target_: notebooks_src.filters.simple_field_filter
+      _partial_: true
+      field: arch
+      values:
+        - _target_: notebooks_src.load_checkpoints.ArchType.from_str
+          name: "OLMO"

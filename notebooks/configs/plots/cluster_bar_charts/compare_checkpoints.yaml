@@ -1,0 +1,22 @@
+plot:
+  _target_: diffract.viz.plots.configurer.UpdateFigure
+  layout:
+    width: 1000
+    height: 500
+  yaxes:
+    title: "count per bin (mean; std below 0)"
+  plot:
+    _target_: diffract.viz.plots.cluster.ClusterBarChart
+    field: weights_svals
+    title: "Cluster bar chart (weights_svals)"
+    parameter_names:
+      - re:.*(q|k|v|o)_proj_head.*layer=(01|04|07|10|13|16).*
+
+    group_by: [model_id, layer_id, head_id]
+    aggregate_by: head_id
+    color_by: layer_id
+    dash_by: model_id
+
+    num_bins: 18
+    binning: exponential
+    draw_statistics: true
