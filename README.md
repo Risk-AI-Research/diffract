@@ -1,3 +1,5 @@
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 # Diffract: Deep Neural Network Weight Analysis Library
 
 Diffract is a Python package for analyzing deep neural network weights and tracking their evolution over the course of training.
@@ -326,8 +328,6 @@ Contributions are welcome! Fork the repo, create a feature branch, and submit a 
 <br>
 
 ## License
-
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Apache License 2.0 — see [LICENSE](LICENSE).
 
