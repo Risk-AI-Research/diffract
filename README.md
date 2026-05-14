@@ -325,6 +325,10 @@ Contributions are welcome! Fork the repo, create a feature branch, and submit a 
 
 <br>
 
-## 📄 License
+## License
 
-MIT
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+Copyright 2026 Risk AI Research.
