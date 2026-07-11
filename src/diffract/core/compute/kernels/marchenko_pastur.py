@@ -3,17 +3,8 @@ from typing import Any, cast
 import numpy as np
 from numpy.typing import NDArray
 
-import diffract.core.utils.imports as import_utils
-
-_skrmt_ensemble = import_utils.get_module("skrmt.ensemble")
-MarchenkoPasturDistribution = (
-    None
-    if _skrmt_ensemble is None
-    else getattr(_skrmt_ensemble, "MarchenkoPasturDistribution", None)
-)
-_SKRMT_AVAILABLE = MarchenkoPasturDistribution is not None
-
 from diffract.core.compute.decorator import kernel
+from diffract.core.compute.extensions.rmt import marchenko_pastur_cdf
 
 
 @kernel(produce_fields=("mp_esd_max", "mp_esd_min", "mp_bulk_std"))
@@ -60,23 +51,15 @@ def mp_ks(
     mp_esd_min: float,
 ) -> float:
     """Compute Kolmogorov-Smirnov distance for Marchenko-Pastur fit."""
-    if not _SKRMT_AVAILABLE:
-        raise ModuleNotFoundError(
-            "Missing optional dependency 'skrmt'. Install scikit-rmt (skrmt) to use "
-            "mp_ks."
-        )
-
     ratio = 1 / (aspect_ratio + 1e-8)
-    beta = 1  # GOE
     sigma = mp_bulk_std  # we consider the fitted bulk std as the standard deviation
 
-    mp_dist = MarchenkoPasturDistribution(ratio, beta, sigma)  # type: ignore[misc]
     esd_mask = (mp_esd_min < esd) & (esd < mp_esd_max)
     if np.sum(esd_mask).astype(int).item() == 0:
         ks_distance = 1
     else:
         esd_filtered = esd[esd_mask]
-        model_cdf = mp_dist.cdf(esd_filtered)
+        model_cdf = marchenko_pastur_cdf(esd_filtered, ratio, sigma)
 
         empirical_cdf = np.arange(esd_filtered.size) / esd_filtered.size
 
