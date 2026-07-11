@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.1
+
+First release published to PyPI as `diffract-core` (the import name stays
+`diffract`).
+
+### Added
+
+- A light core install: `pip install diffract-core` works without any deep
+  learning framework, the viz stack loads lazily, optional-dependency errors
+  name the extra to install, and the `all` extra bundles torch, viz, taichi,
+  pandas, and polars.
+- `py.typed` marker and PEP 639 license metadata; LICENSE and NOTICE ship in
+  the wheel.
+
+### Changed
+
+- numpy 2.x is supported (`numpy >=1.26,<3`, `scipy >=1.12`). The
+  Marchenko-Pastur CDF and Tracy-Widom quantiles are computed by a vendored
+  implementation (closed-form MP antiderivative; Painleve II integration for
+  TW), replacing the scikit-rmt dependency, whose distribution metadata
+  capped numpy at 1.26 and scipy at 1.12. Parity with scikit-rmt is pinned
+  by golden tests.
+- powerlaw is pinned below 2.0: its 2.x line changes the Fit API the
+  heavy-tailed kernels rely on.
+
 ## 0.2.0
 
 Reorganizes the public API around namespaces, overhauls the visualization system, and
