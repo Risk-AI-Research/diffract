@@ -75,8 +75,8 @@ def _get_fit_class() -> Any:
         if _fit_class is None:
             raise ModuleNotFoundError(
                 "The accelerated 'diffract' fit implementation needs taichi. "
-                "Install it with: uv sync --extra taichi (or pip install "
-                "taichi), or use fit_method='powerlaw'."
+                'Install it with: pip install "diffract-core[taichi]", '
+                "or use fit_method='powerlaw'."
             )
     return _fit_class
 

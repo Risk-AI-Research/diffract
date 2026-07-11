@@ -14,7 +14,7 @@ def test_missing_optional_format_names_the_extra(
 ) -> None:
     monkeypatch.delitem(registry.FORMATTERS, "pandas", raising=False)
 
-    with pytest.raises(ValueError, match="--extra pandas"):
+    with pytest.raises(ValueError, match=r"diffract-core\[pandas\]"):
         registry.get_formatter("pandas")
 
 

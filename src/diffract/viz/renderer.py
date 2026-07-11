@@ -34,6 +34,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from diffract.viz.styling import Theme
 
 _PLOTLY_GO = "plotly.graph_objects"
+_VIZ_EXTRA_HINT = (
+    "diffract.viz requires the viz extra. "
+    'Install it with: pip install "diffract-core[viz]"'
+)
 _THEME_STRUCTURED_KEYS = frozenset(
     {"layout", "typography", "background", "axes", "legend", "colorbar", "palettes"}
 )
@@ -78,7 +82,10 @@ def render(
 
 def load_theme(theme_path: str | Path) -> Theme:
     """Load a `viz` Theme from YAML."""
-    yaml = import_utils.require("yaml")
+    try:
+        yaml = import_utils.require("yaml")
+    except ImportError as e:
+        raise ImportError(_VIZ_EXTRA_HINT) from e
 
     path = Path(theme_path).expanduser().resolve()
     with path.open(encoding="utf-8") as handle:
@@ -99,10 +106,14 @@ def render_from_config(
     theme_path: str | Path | None = None,
 ) -> go.Figure:
     """Load a Hydra YAML config and render a figure."""
-    compose = import_utils.require("hydra").compose
-    initialize_config_dir = import_utils.require("hydra").initialize_config_dir
-    instantiate = import_utils.require("hydra.utils").instantiate
-    omega_conf = import_utils.require("omegaconf").OmegaConf
+    try:
+        hydra = import_utils.require("hydra")
+        instantiate = import_utils.require("hydra.utils").instantiate
+        omega_conf = import_utils.require("omegaconf").OmegaConf
+    except ImportError as e:
+        raise ImportError(_VIZ_EXTRA_HINT) from e
+    compose = hydra.compose
+    initialize_config_dir = hydra.initialize_config_dir
 
     cfg_path = Path(config_path).expanduser().resolve()
     config_dir = str(cfg_path.parent)

@@ -73,8 +73,8 @@ def get_formatter(name: str) -> IResultFormatter:
             extra = _OPTIONAL_FORMAT_EXTRAS[name]
             msg = (
                 f"Export format '{name}' requires the optional dependency "
-                f"'{extra}'. Install it with: uv sync --extra {extra} "
-                f"(or: pip install {extra})."
+                f"'{extra}'. Install it with: "
+                f'pip install "diffract-core[{extra}]".'
             )
         else:
             known = ", ".join(sorted(FORMATTERS))

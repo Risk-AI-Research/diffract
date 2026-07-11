@@ -18,7 +18,7 @@ logging.getLogger("diffract").setLevel(logging.ERROR)
 
 project = "Diffract"
 try:
-    release = get_version("diffract")
+    release = get_version("diffract-core")
 except PackageNotFoundError:
     release = "0.2.0"
 version = release

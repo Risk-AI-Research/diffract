@@ -4,6 +4,15 @@ This module mirrors (approximately) the public surface of `diffract.viz.plots`
 for the refactored plotting stack.
 """
 
+try:
+    import plotly
+except ImportError as e:
+    _msg = (
+        "diffract.viz requires the viz extra. "
+        'Install it with: pip install "diffract-core[viz]"'
+    )
+    raise ImportError(_msg) from e
+
 from .base import UpdateFigure
 from .boxplot import BoxPlot
 from .cluster import ClusterBarChart

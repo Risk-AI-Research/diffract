@@ -56,7 +56,10 @@ if not import_utils.is_available("zarr"):
 
         def __new__(cls, *_args: Any, **_kwargs: Any) -> Self:
             """Raise ImportError because the optional dependency is missing."""
-            msg = "zarr package not available; install with: uv sync --extra zarr"
+            msg = (
+                "zarr package not available; "
+                'install with: pip install "diffract-core[zarr]"'
+            )
             raise ImportError(msg)
 
 else:

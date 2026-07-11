@@ -1,21 +1,25 @@
 [project]
-name = "diffract"
+name = "diffract-core"
 dynamic = ["version"]
-description = "Deep neural network weight analysis and evolution tracking library"
+description = "Spectral analysis of neural network weights and their evolution over training"
 readme = "README.md"
 authors = [
     { name = "Risk AI Research" },
 ]
-license = { text = "Apache-2.0" }
+maintainers = [
+    { name = "Nikita Borodin", email = "borodinik.s@gmail.com" },
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12,<3.13"
-keywords = ["deep-learning", "neural-networks", "weight-analysis", "model-inspection", "spectral-analysis"]
+keywords = ["spectral-analysis", "random-matrix-theory", "deep-learning", "llm", "neural-networks"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -23,13 +27,21 @@ dependencies = [
     "h5py >=3.9.0",
     "numpy >=1.21.6,<=1.26.4",
     "ordered-set >=4.1.0",
-    "powerlaw >=1.5.0",
+    "powerlaw >=1.5.0,<2",
     "rootutils >=1.0.7,<2",
     "scikit-rmt >=1.1.0",
     "scipy >=1.12.0,<1.14.0",
     "tqdm >=4.65.0",
     "typing-extensions >=4.8.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Risk-AI-Research/diffract"
+Documentation = "https://risk-ai-research.github.io/diffract/"
+Repository = "https://github.com/Risk-AI-Research/diffract"
+Issues = "https://github.com/Risk-AI-Research/diffract/issues"
+Changelog = "https://github.com/Risk-AI-Research/diffract/blob/main/CHANGELOG.md"
+Paper = "https://openreview.net/forum?id=XBUHoiAGDE"
 
 [project.optional-dependencies]
 torch = ["torch >=2.7.0"]
@@ -73,6 +85,17 @@ notebooks = [
     "einops >=0.7.0",
 ]
 taichi = ["taichi >=1.7.3"]
+all = [
+    "torch >=2.7.0",
+    "plotly >=6.0.0",
+    "kaleido >=0.2.1",
+    "hydra-core >=1.3.0",
+    "omegaconf >=2.3.0",
+    "pyyaml >=6.0.1",
+    "pandas >=2.1.0",
+    "polars >=0.20.0",
+    "taichi >=1.7.3",
+]
 docs = [
     "myst-parser >=2.0.0",
     "sphinx >=7.0.0",
@@ -110,7 +133,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling>=1.18.0"]
+requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
@@ -118,20 +141,14 @@ path = "src/diffract/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/diffract"]
-include = [
-    "src/diffract/viz/configs/*.yaml",
-    "src/diffract/configs/*.ini",
-]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
     "/tests",
-    "/docs",
-    "/notebooks",
-    "/examples",
     "/README.md",
     "/LICENSE",
+    "/NOTICE",
     "/pyproject.toml",
     "/ruff.toml",
 ]
@@ -280,7 +297,7 @@ explicit = false
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-tag_format = "$version"
+tag_format = "v$version"
 version_scheme = "pep440"
 version_provider = "uv"
 update_changelog_on_bump = true

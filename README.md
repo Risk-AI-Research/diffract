@@ -1,6 +1,13 @@
 # Diffract: Deep Neural Network Weight Analysis Library
 
+[![CI](https://github.com/Risk-AI-Research/diffract/actions/workflows/ci.yml/badge.svg)](https://github.com/Risk-AI-Research/diffract/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/diffract-core)](https://pypi.org/project/diffract-core/)
+[![Python](https://img.shields.io/pypi/pyversions/diffract-core)](https://pypi.org/project/diffract-core/)
+[![Docs](https://img.shields.io/badge/docs-github.io-blue)](https://risk-ai-research.github.io/diffract/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+Official library of ["Diffract: Spectral View of LLM Domain Adaptation"](https://openreview.net/forum?id=XBUHoiAGDE)
+(**ICML 2026 Oral**).
 
 Diffract is a Python package for analyzing deep neural network weights and tracking
 their evolution over the course of training.
@@ -16,31 +23,33 @@ dictionaries of NumPy weight matrices.
 
 ## 🚀 Quick Start
 
-Diffract requires Python 3.12 (uv provisions it automatically):
+Diffract requires Python 3.12. The core package installs without any deep
+learning framework; heavy dependencies are opt-in extras:
+
+```bash
+pip install diffract-core                # core: extraction, spectral metrics, storage
+pip install "diffract-core[torch]"       # + PyTorch model loading (CUDA wheels on Linux, ~2-3 GB)
+pip install "diffract-core[viz]"         # + Plotly visualization and YAML plot configs
+pip install "diffract-core[taichi]"      # + accelerated heavy-tailed fits and p-value kernels
+pip install "diffract-core[all]"         # torch + viz + taichi + pandas/polars exports
+```
+
+Further extras: `frameworks` (TensorFlow, Flax, ONNX), `pandas` / `polars`
+(DataFrame exports), `zarr` (cloud storage), `redis` (shared cache),
+`notebooks` (tooling for the example notebooks). The quotes around
+`"diffract-core[...]"` matter in zsh.
+
+### Development Install
 
 ```bash
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Clone and install
+# Clone and install (uv provisions Python 3.12 automatically)
 git clone https://github.com/Risk-AI-Research/diffract.git
 cd diffract
-uv sync --extra dev
+uv sync --extra dev --extra torch
 ```
-
-### Optional Extras
-
-- `uv sync --extra torch` installs PyTorch, which the Quick Start snippet below relies
-  on.
-- `uv sync --extra frameworks` installs TensorFlow, Flax, and ONNX support.
-- `uv sync --extra viz` installs Plotly, Kaleido, Hydra, OmegaConf, and PyYAML so the
-  visualization helpers work. `make test` passes this extra automatically.
-- `uv sync --extra common` installs the viz stack together with pandas and polars for
-  DataFrame exports.
-- `uv sync --extra taichi` installs Taichi for accelerated heavy-tailed fits and
-  p-value kernels.
-- `uv sync --extra notebooks` installs notebook-focused tooling (`jupyter`,
-  `matplotlib`, `ipywidgets`, `safetensors`, `einops`).
 
 Then use it in your code:
 

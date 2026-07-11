@@ -4,8 +4,14 @@ Diffract is a Python library for analyzing deep neural network weights and track
 
 ## Installation
 
-Diffract requires Python 3.12 (uv provisions it automatically). Clone the
-repository and install with [uv](https://docs.astral.sh/uv/):
+Diffract requires Python 3.12:
+
+```bash
+pip install diffract-core
+```
+
+For development, clone the repository and install with
+[uv](https://docs.astral.sh/uv/), which provisions Python automatically:
 
 ```bash
 git clone https://github.com/Risk-AI-Research/diffract.git
@@ -29,14 +35,12 @@ uv sync --extra dev
 | `zarr` | Zarr storage backend (cloud-native arrays via fsspec) |
 | `taichi` | Taichi-accelerated heavy-tailed fitting and bootstrap p-value kernels |
 | `common` | viz + pandas + polars (recommended) |
+| `all` | torch + viz + taichi + pandas + polars |
 | `notebooks` | Dependencies for the example notebooks |
 | `docs` | Build this documentation |
 
-Install extras with:
-
-```bash
-uv sync --extra torch --extra common
-```
+Install extras with `pip install "diffract-core[torch,common]"` (quotes matter
+in zsh), or `uv sync --extra torch --extra common` in a clone.
 
 ## Start here
 
