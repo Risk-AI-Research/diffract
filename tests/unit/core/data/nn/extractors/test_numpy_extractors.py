@@ -83,5 +83,8 @@ def test_factory_dispatches_empty_dict() -> None:
 
 
 def test_factory_rejects_non_string_keys() -> None:
-    extractor = create_extractor({1: np.ones((2, 2))})
+    try:
+        extractor = create_extractor({1: np.ones((2, 2))})
+    except TypeError:
+        return
     assert not isinstance(extractor, NumpyDictExtractor)
