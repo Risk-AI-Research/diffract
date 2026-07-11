@@ -1,0 +1,23 @@
+# @package refs
+
+
+layer:
+    _target_: diffract.viz.data.FieldRef
+    field: layer_id
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: numeric
+        
+layer_cat:
+    _target_: diffract.viz.data.FieldRef
+    field: layer_id
+    data_type:
+      _target_: diffract.viz.data.DataType.from_string
+      name: categorical
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: numeric

@@ -22,9 +22,10 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .containers import list_profiles
+from .core.data.nn.params.schema import ParameterType
 from .session import ParameterOverrides, Session
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ParameterOverrides",
+    "ParameterType",
     "Session",
     "__version__",
     "list_profiles",

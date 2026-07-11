@@ -23,16 +23,18 @@ See [Configuration](../reference/configuration.md) for all profile options and c
 
 ```python
 with session:
-    session.add(model, model_id="my-model")
+    session.models.add(model, model_id="my-model")
 ```
 
-Diffract extracts parameters and stores them. Supported frameworks: PyTorch, TensorFlow, Flax, ONNX.
+Diffract extracts parameters and stores them. Supported frameworks: PyTorch,
+TensorFlow, Flax, ONNX. A plain `dict[str, numpy.ndarray]` of weight matrices
+also works, without any framework installed.
 
 ## 3. Compute fields
 
 ```python
 with session:
-    session.compute("frob_norm", "stable_rank")
+    session.compute.apply("frob_norm", "stable_rank")
 ```
 
 Diffract resolves dependencies and executes kernels. Results are stored automatically.
@@ -41,9 +43,9 @@ Diffract resolves dependencies and executes kernels. Results are stored automati
 
 ```python
 with session:
-    results = session.get_results(
+    results = session.results.export_metrics(
         "frob_norm", "stable_rank",
-        export_format="dict"  # or "pandas", "json"
+        export_format="dict"  # or "pandas", "polars", "json", "list"
     )
 ```
 
@@ -52,10 +54,8 @@ with session:
 If you installed the `viz` extra:
 
 ```python
-from diffract.viz.plots.scalar import BoxPlot
-
 with session:
-    fig = session.draw(plot=BoxPlot(field="stable_rank", group_by="model_id"))
+    fig = session.viz.box(y="stable_rank", x="model_id")
     fig.show()
 ```
 
@@ -68,13 +68,13 @@ session = Session(profile="local")
 
 with session:
     # Add your model
-    session.add(model, model_id="gpt2-small")
+    session.models.add(model, model_id="gpt2-small")
     
     # Compute metrics
-    session.compute("frob_norm", "stable_rank", "effective_rank")
+    session.compute.apply("frob_norm", "stable_rank", "effective_rank")
     
     # Export results
-    df = session.get_results(
+    df = session.results.export_metrics(
         "frob_norm", "stable_rank", "effective_rank",
         export_format="pandas"
     )

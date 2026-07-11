@@ -5,14 +5,16 @@ diffract_config_path: ./configs/hybrid.ini
 experiments_dirs:
   - ./model_checkpoints
   
+model_mapping: {}
+
 add_model_agg:
-  - - olmo_step10k
-    - olmo_step100k
-        
+  - ["olmo_step10k", "olmo_step100k"]
+
 ckpt_collector:
   _target_: notebooks_src.load_checkpoints.CkptCollector
   _partial_: true
-  ckpt_filter: null
+  ckpt_filter: ${ckpt_filter}
+  # ckpt_filter: null
   ckpt_processor: ${ckpt_processor}
 
 ckpt_processor:
@@ -30,3 +32,7 @@ ckpt_processor:
       values:
         - _target_: notebooks_src.load_checkpoints.ArchType.from_str
           name: "OLMO"
+          
+# No path filtering: every discovered whole-model checkpoint is loaded.
+ckpt_filter:
+  _target_: notebooks_src.load_checkpoints.CkptFilter

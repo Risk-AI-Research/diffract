@@ -10,6 +10,7 @@ Export computed fields in various formats.
 | `json` | — | JSON string |
 | `pandas` | `pandas` | pandas DataFrame |
 | `polars` | `polars` | polars DataFrame |
+| `list` | — | List of record dicts |
 
 ## Basic usage
 
@@ -19,13 +20,17 @@ from diffract import Session
 session = Session(profile="local")
 
 with session:
-    session.compute("frob_norm", "stable_rank")
+    session.compute.apply("frob_norm", "stable_rank")
     
     # Dictionary (nested by parameter uid)
-    results = session.get_results("frob_norm", "stable_rank", export_format="dict")
+    results = session.results.export_metrics(
+        "frob_norm", "stable_rank", export_format="dict"
+    )
     
     # JSON string
-    json_str = session.get_results("frob_norm", "stable_rank", export_format="json")
+    json_str = session.results.export_metrics(
+        "frob_norm", "stable_rank", export_format="json"
+    )
 ```
 
 ## Tabular exports (pandas / polars)
@@ -42,39 +47,44 @@ Export to a DataFrame:
 
 ```python
 with session:
-    df = session.get_results(
+    df = session.results.export_metrics(
         "frob_norm", "stable_rank", "effective_rank",
         export_format="pandas"
     )
-    print(df.head())
+    print(df.head().to_string())
 ```
 
 Output:
 
 ```
-                                    uid       name    model_id  frob_norm  stable_rank
-0  a1b2c3d4-e5f6-7890-abcd-ef1234567890  layer.0.weight  my-model   12.345       64.2
-1  b2c3d4e5-f6a7-8901-bcde-f12345678901  layer.1.weight  my-model   15.678       48.7
+  parameter_uid  model_id parameter_name parameter_type  meta_in_model_idx meta_torch_dtype meta_original_model_id  frob_norm  stable_rank  effective_rank
+0      b5c80064  my-model            fc1          DENSE                  1    torch.float32               4f0ec9e0   4.690019    11.069382       29.816245
+1      ef6d4a0c  my-model            fc2          DENSE                  2    torch.float32               4f0ec9e0   2.277429     8.742566       15.563562
 ```
+
+Each row is one parameter: identity columns (`parameter_uid`, `model_id`,
+`parameter_name`, `parameter_type`), metadata columns prefixed with `meta_`,
+and one column per requested field.
 
 ## Filtering exports
 
-Apply the same filters as `compute()`:
+`export_metrics()` itself only takes field names and `export_format`. To export a
+subset, create a filtered scope with `session.filter(...)` and call
+`export_metrics()` on it. See [Filtering Parameters](filtering.md) for all
+filter options.
 
 ```python
 with session:
     # Only parameters from a specific model
-    df = session.get_results(
+    df = session.filter(model_ids=["gpt2-small"]).results.export_metrics(
         "frob_norm",
         export_format="pandas",
-        model_ids=["gpt2-small"]
     )
     
     # Only attention layers (using regex)
-    df = session.get_results(
+    df = session.filter(param_names=["re:.*attn.*"]).results.export_metrics(
         "frob_norm",
         export_format="pandas",
-        parameter_names=["re:.*attn.*"]
     )
 ```
 
@@ -85,14 +95,40 @@ Aggregated kernels produce contextual field names like `metric@models[m1]@params
 ```python
 with session:
     # Matches both "overlap" and "overlap@models[m1,m2]@params[...]"
-    df = session.get_results("overlap", export_format="pandas")
+    df = session.results.export_aggregates("overlap", export_format="pandas")
+```
+
+## Ingesting and erasing results
+
+`session.results` also covers the reverse direction:
+
+- `ingest_metrics(fields_by_uid, force=False)` — store precomputed per-parameter
+  values via a `uid -> {field_name: value}` mapping. Raises on existing fields
+  unless `force=True`.
+- `ingest_aggregates(aggregates, force=False)` — store precomputed aggregate
+  values, each identified by `field_name`, `context_models`, and optional
+  `context_params`.
+- `erase(*fields, erase_dependent_also=False, erase_all=False)` — remove
+  computed field data while keeping the parameters. Field names are resolved
+  through the kernel registry, so `erase()` applies to kernel-produced fields.
+
+```python
+with session:
+    df = session.results.export_metrics("frob_norm", export_format="pandas")
+    uid = df["parameter_uid"].iloc[0]
+    
+    # Attach an externally computed value to a parameter
+    session.results.ingest_metrics({uid: {"external_score": 0.87}})
+    
+    # Drop a computed field (parameters stay)
+    session.results.erase("frob_norm")
 ```
 
 ## Saving exports
 
 ```python
 with session:
-    df = session.get_results("frob_norm", export_format="pandas")
+    df = session.results.export_metrics("frob_norm", export_format="pandas")
     
     # CSV
     df.to_csv("results.csv", index=False)
@@ -105,7 +141,7 @@ For polars:
 
 ```python
 with session:
-    df = session.get_results("frob_norm", export_format="polars")
+    df = session.results.export_metrics("frob_norm", export_format="polars")
     df.write_csv("results.csv")
     df.write_parquet("results.parquet")
 ```

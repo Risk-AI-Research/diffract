@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from diffract.core.compute.parallel import ParallelContext, map_maybe_parallel
 from diffract.core.constants import REGEX_PREFIX, TABLE_PARAMETERS
 from diffract.core.data.utils import build_matcher
 from diffract.core.data.view import DataView
+from diffract.core.parallel import ParallelContext, map_maybe_parallel
 
 from .metadata import ParameterMetadata
 from .proxy import ParameterDataProxy
@@ -61,9 +61,7 @@ class ParameterView(DataView[ParameterMetadata, ParameterDataProxy]):
         )
         self._sorted = True
 
-    def filter_by_name(
-        self, *names: str, inverse_mask: bool = False
-    ) -> ParameterView:
+    def filter_by_name(self, *names: str, inverse_mask: bool = False) -> ParameterView:
         """Filter parameters by name.
 
         Args:
@@ -315,12 +313,13 @@ class ParameterView(DataView[ParameterMetadata, ParameterDataProxy]):
             return
 
         with self:
-            for field in fields:
-                self._repository.storage_manager.erase_field_for_all(
-                    field, table=TABLE_PARAMETERS
-                )
-                if self._repository.cache_manager is not None:
-                    self._repository.cache_manager.erase_field_for_all(field)
+            for uid in uids:
+                for field in fields:
+                    self._repository.storage_manager.erase_field(
+                        uid, field, table=TABLE_PARAMETERS
+                    )
+                    if self._repository.cache_manager is not None:
+                        self._repository.cache_manager.erase_field(uid, field)
 
     def erase_fields_with_regexp(self, *patterns: str) -> None:
         """Erase fields matching regex patterns from all parameters in this view."""
@@ -333,36 +332,34 @@ class ParameterView(DataView[ParameterMetadata, ParameterDataProxy]):
         )
 
         with self:
-            for pattern in patterns:
-                for field_name in all_fields:
-                    if re.fullmatch(pattern, field_name):
-                        self._repository.storage_manager.erase_field_for_all(
-                            field_name, table=TABLE_PARAMETERS
-                        )
-                        if self._repository.cache_manager is not None:
-                            self._repository.cache_manager.erase_field_for_all(
-                                field_name
+            for uid in uids:
+                for pattern in patterns:
+                    for field_name in all_fields:
+                        if re.fullmatch(pattern, field_name):
+                            self._repository.storage_manager.erase_field(
+                                uid, field_name, table=TABLE_PARAMETERS
                             )
+                            if self._repository.cache_manager is not None:
+                                self._repository.cache_manager.erase_field(
+                                    uid, field_name
+                                )
 
     def clear(self, erase: bool = False) -> None:
         """Clear this view and optionally erase corresponding data.
-        
+
         Args:
             erase: If True, also erase underlying storage data.
                    If False, only clear membership (metadata index).
         """
         uids = self._ensure_uids()
 
-        if erase:
-            if self._repository.cache_manager is not None:
-                self._repository.cache_manager.clear()
+        if erase and self._repository.cache_manager is not None:
+            self._repository.cache_manager.clear()
 
         with self._repository:
             for uid in list(uids):
                 self._repository._proxy_cache.pop(uid, None)
-                self._repository.metadata_index.delete(
-                    TABLE_PARAMETERS, uid
-                )
+                self._repository.metadata_index.delete(TABLE_PARAMETERS, uid)
                 if erase:
                     self._repository.storage_manager.erase_obj(
                         uid, table=TABLE_PARAMETERS
@@ -373,6 +370,7 @@ class ParameterView(DataView[ParameterMetadata, ParameterDataProxy]):
         else:
             self._uids = []
         self._sorted = True
+
     def _get_cache_budget_bytes(self, headroom_factor: float = 0.4) -> int:
         """Get read budget based on available cache capacity.
 
@@ -393,4 +391,3 @@ class ParameterView(DataView[ParameterMetadata, ParameterDataProxy]):
             return fallback
 
         return max(1024 * 1024, int(available * headroom_factor))
-

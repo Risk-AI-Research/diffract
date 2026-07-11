@@ -5,13 +5,13 @@ It is designed for workflows where you repeatedly compute metrics over model par
 
 ## When to use Diffract
 
-Diffract shines when your analysis is **iterative and repeated**: multiple training runs, many metrics, or large models. If you just need one metric for one model once, a simple script may be faster.
+Diffract shines when your analysis is **iterative**: multiple training runs, many metrics, or large models. If you just need one metric for one model once, a simple script may be faster.
 
 **What it solves:**
 
 - **No more one-off scripts** — a single API (`Session`) for adding models, computing metrics, exporting, and plotting.
-- **Fast iteration** — parameters and computed fields persist (SQLite / HDF5), so you don't recompute everything after restarting.
-- **Consistent metrics** — metrics are *kernels* with declared dependencies; Diffract executes them in the correct order.
+- **Fast iteration** — parameters and computed fields persist (SQLite / HDF5 / Zarr), so you don't recompute everything after restarting.
+- **Consistent metrics** — metrics are computed by *kernels* with declared dependencies; Diffract executes them in the correct order.
 - **Scales to large models** — chunked execution and configurable storage keep memory usage manageable.
 
 ## Core concepts
@@ -25,14 +25,16 @@ from diffract import Session
 
 session = Session(profile="local")
 with session:
-    session.add(model, model_id="run-001")
-    session.compute("frob_norm", "stable_rank")
-    results = session.get_results("frob_norm", "stable_rank", export_format="dict")
+    session.models.add(model, model_id="run-001")
+    session.compute.apply("frob_norm", "stable_rank")
+    results = session.results.export_metrics(
+        "frob_norm", "stable_rank", export_format="dict"
+    )
 ```
 
 ### Parameters
 
-When you call `session.add(...)`, Diffract extracts model parameters and stores them. Each parameter is addressable by:
+When you call `session.models.add(...)`, Diffract extracts model parameters and stores them. Each parameter is addressable by:
 
 - **model_id** — identifier you assign when adding a model
 - **name** — layer/parameter name from the model
@@ -50,15 +52,16 @@ A **kernel** is a function that produces one or more fields. Kernels declare the
 - **Storage** persists parameters and computed fields across Python sessions.
 - **Cache** accelerates repeated reads of computed values.
 
-Both are pluggable: RAM, SQLite, HDF5, hybrid, Redis, or simple in-process LRU.
+Both are pluggable. Storage backends: RAM, SQLite, HDF5, Zarr, or hybrid. Cache backends: none, simple in-process LRU, or Redis.
 
 ## What you can do
 
-- Add models from PyTorch, TensorFlow, Flax, ONNX (and custom extractors)
+- Add models from PyTorch, TensorFlow, Flax, ONNX, or plain NumPy array dicts
+  (and custom extractors)
 - Compute 60+ built-in fields (norms, ranks, spectral metrics, heavy-tailed fits, etc.)
-- Configure kernel parameters per session
+- Configure kernel parameters at runtime
 - Filter computations by model, layer, or parameter type
-- Export results to dict, JSON, pandas, or polars
+- Export results to dict, JSON, pandas, polars, or list
 - Render Plotly visualizations via the optional `viz` extra
 
 ## Why Diffract vs ad-hoc scripts

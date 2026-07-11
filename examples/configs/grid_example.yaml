@@ -1,5 +1,5 @@
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
     _target_: diffract.viz.plots.subplots.GridPlot
     make_subplots_kwargs:
@@ -14,19 +14,19 @@ plot:
         col: 1
         title: "frob_norm"
         plot:
-          _target_: diffract.viz.plots.scalar.BoxPlot
-          field: frob_norm
-          group_by: model_id
-          color_by: model_id
+          _target_: diffract.viz.plots.boxplot.BoxPlot
+          y: frob_norm
+          x: model_id
+          marker_color: model_id
       - _target_: diffract.viz.plots.subplots.SubplotSpec
         row: 1
         col: 2
         title: "stable_rank"
         plot:
-          _target_: diffract.viz.plots.scalar.BoxPlot
-          field: stable_rank
-          group_by: model_id
-          color_by: model_id
+          _target_: diffract.viz.plots.boxplot.BoxPlot
+          y: stable_rank
+          x: model_id
+          marker_color: model_id
 
 config:
   layout:

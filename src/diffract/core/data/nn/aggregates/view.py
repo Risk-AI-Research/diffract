@@ -127,17 +127,43 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
         Returns:
             New view with filtered aggregates.
         """
+        exact_names: set[str] = set()
+        regex_patterns: list[re.Pattern[str]] = []
+        for model_id in model_ids:
+            if model_id.startswith(REGEX_PREFIX):
+                regex_patterns.append(re.compile(model_id.removeprefix(REGEX_PREFIX)))
+            else:
+                exact_names.add(model_id)
+
         if not self._sorted:
             self._sort_in_place()
 
         uids = self._ensure_uids()
-        model_set = set(model_ids)
 
         def _matches(context_models: tuple[str, ...]) -> bool:
             context_set = set(context_models)
-            if require_all:
-                return model_set <= context_set
-            return bool(model_set & context_set)
+
+            if exact_names:
+                if require_all:
+                    if not exact_names <= context_set:
+                        return False
+                elif not (exact_names & context_set):
+                    return False
+
+            if regex_patterns:
+                if require_all:
+                    for pattern in regex_patterns:
+                        if not any(
+                            pattern.fullmatch(cm) is not None for cm in context_models
+                        ):
+                            return False
+                elif not any(
+                    any(pattern.fullmatch(cm) is not None for pattern in regex_patterns)
+                    for cm in context_models
+                ):
+                    return False
+
+            return True
 
         filtered = [
             uid
@@ -153,30 +179,89 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
         """Filter aggregates by participating parameters.
 
         Args:
-            *param_names: Parameter names that must be in the aggregate's context_params.
+            *param_names: Parameter names that must be in the aggregate's
+                context_params.
             require_all: If True, all param_names must be present. If False,
                          at least one must be present.
 
         Returns:
             New view with filtered aggregates.
         """
+        exact_names: set[str] = set()
+        regex_patterns: list[re.Pattern[str]] = []
+        for param_name in param_names:
+            if param_name.startswith(REGEX_PREFIX):
+                regex_patterns.append(re.compile(param_name.removeprefix(REGEX_PREFIX)))
+            else:
+                exact_names.add(param_name)
+
         if not self._sorted:
             self._sort_in_place()
 
         uids = self._ensure_uids()
-        param_set = set(param_names)
 
         def _matches(context_params: tuple[str, ...]) -> bool:
             context_set = set(context_params)
-            if require_all:
-                return param_set <= context_set
-            return bool(param_set & context_set)
+
+            if exact_names:
+                if require_all:
+                    if not exact_names <= context_set:
+                        return False
+                elif not (exact_names & context_set):
+                    return False
+
+            if regex_patterns:
+                if require_all:
+                    for pattern in regex_patterns:
+                        if not any(
+                            pattern.fullmatch(cp) is not None for cp in context_params
+                        ):
+                            return False
+                elif not any(
+                    any(pattern.fullmatch(cp) is not None for pattern in regex_patterns)
+                    for cp in context_params
+                ):
+                    return False
+
+            return True
 
         filtered = [
             uid
             for uid in uids
             if _matches(self._repository.get_proxy(uid).meta.context_params)
         ]
+
+        return AggregateView(repository=self._repository, uids=filtered)
+
+    def filter_by_exact_context(
+        self,
+        *,
+        models: tuple[str, ...] | None = None,
+        params: tuple[str, ...] | None = None,
+    ) -> AggregateView:
+        """Filter aggregates by exact context match.
+
+        Unlike filter_by_context_models/params which use set intersection,
+        this method requires exact equality of the context tuples.
+
+        Args:
+            models: Exact context_models tuple to match. If None, any models match.
+            params: Exact context_params tuple to match. If None, any params match.
+
+        Returns:
+            New view with aggregates matching the exact context.
+        """
+        if not self._sorted:
+            self._sort_in_place()
+
+        uids = self._ensure_uids()
+
+        def _matches(proxy: AggregateProxy) -> bool:
+            if models is not None and proxy.meta.context_models != models:
+                return False
+            return not (params is not None and proxy.meta.context_params != params)
+
+        filtered = [uid for uid in uids if _matches(self._repository.get_proxy(uid))]
 
         return AggregateView(repository=self._repository, uids=filtered)
 
@@ -196,23 +281,20 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
 
     def clear(self, erase: bool = False) -> None:
         """Clear this view and optionally erase corresponding data.
-        
+
         Args:
             erase: If True, also erase underlying storage data.
                    If False, only clear membership (metadata index).
         """
         uids = self._ensure_uids()
 
-        if erase:
-            if self._repository.cache_manager is not None:
-                self._repository.cache_manager.clear()
+        if erase and self._repository.cache_manager is not None:
+            self._repository.cache_manager.clear()
 
         with self._repository:
             for uid in list(uids):
                 self._repository._proxy_cache.pop(uid, None)
-                self._repository.metadata_index.delete(
-                    TABLE_AGGREGATES, uid
-                )
+                self._repository.metadata_index.delete(TABLE_AGGREGATES, uid)
                 if erase:
                     self._repository.storage_manager.erase_obj(
                         uid, table=TABLE_AGGREGATES

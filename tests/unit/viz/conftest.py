@@ -63,11 +63,40 @@ def mock_session():
         },
     }
 
-    def mock_get_results(*fields, **kwargs):
+    def mock_export_metrics(*fields, **kwargs):
         return sample_data
 
+    def mock_export_aggregates(*fields, **kwargs):
+        return []
+
+    def mock_export(*fields, sources="all", export_format="dict", expand_contextual=True, **kwargs):
+        return sample_data
+
+    session.results = MagicMock()
+    session.results.export_metrics = mock_export_metrics
+    session.results.export_aggregates = mock_export_aggregates
+    session.results.export = mock_export
     session.compute = MagicMock()
-    session.get_results = mock_get_results
+
+    # For filter() support in SubplotSpec tests
+    def mock_filter(**kwargs):
+        filtered_session = MagicMock()
+        filtered_session.results = MagicMock()
+        # Filter by model_ids if provided
+        model_ids = kwargs.get("model_ids")
+        if model_ids:
+            filtered_data = {
+                k: v for k, v in sample_data.items()
+                if v["metadata"]["model_id"] in model_ids
+            }
+        else:
+            filtered_data = sample_data
+        filtered_session.results.export_metrics = lambda *f, **kw: filtered_data
+        filtered_session.results.export = lambda *f, **kw: filtered_data
+        filtered_session.results.export_aggregates = lambda *f, **kw: []
+        return filtered_session
+
+    session.filter = mock_filter
 
     return session
 

@@ -18,7 +18,7 @@ def try_load_config(config_path: str, overrides: List[str] = []) -> tuple[bool, 
         with initialize(configs_dir_str, version_base="1.3"):
             config_path_str = os.path.relpath(Path(config_path), Paths.CONFIG_DIR)
             cfg = compose(config_path_str, overrides=overrides)
-
+            
         OmegaConf.resolve(cfg)
 
         return True, cfg, None

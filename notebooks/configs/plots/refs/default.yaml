@@ -1,0 +1,12 @@
+# @package refs
+
+
+defaults:
+    - ./attn_ptype.yaml
+    - ./head.yaml
+    - ./layer.yaml
+    - ./model.yaml
+    - ./pretrain_step.yaml
+    - ./metric.yaml
+    - ./model_size.yaml
+    - _self_

@@ -160,6 +160,8 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
             Exception: If handler processing fails and not skipping.
         """
         with parameter_repository:
+            model_id = get_unique_id()
+
             for param_idx, (param_name, parameter) in enumerate(
                 self._iter_parameters()
             ):
@@ -187,7 +189,7 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
                 ptype, weights, handler = result
 
                 param_meta = self._build_metadata(
-                    parameter, param_name, param_idx, ptype, handler
+                    parameter, model_id, param_name, param_idx, ptype, handler
                 )
                 param_proxy = ParameterDataProxy.create_and_store(
                     meta=param_meta,
@@ -207,6 +209,7 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
     def _build_metadata(
         self,
         parameter: Any,
+        model_id: str,
         param_name: str,
         param_idx: int,
         ptype: ParameterType,
@@ -219,6 +222,7 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
 
         Args:
             parameter: The original parameter object.
+            model_id: Identifier of the model the parameter belongs to.
             param_name: Name of the parameter.
             param_idx: Index of parameter in model iteration order.
             ptype: Parameter type determined by handler.
@@ -230,7 +234,7 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
         metadata: dict[str, Any] = {
             "name": param_name,
             "ptype": ptype,
-            "model_id": get_unique_id(),
+            "model_id": model_id,
             "other_meta": {"in_model_idx": param_idx},
         }
 

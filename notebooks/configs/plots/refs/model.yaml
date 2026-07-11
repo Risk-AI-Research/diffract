@@ -1,0 +1,12 @@
+# @package refs
+
+
+model:
+    _target_: diffract.viz.data.FieldRef
+    field: model_id
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: custom
+      custom_order: ${models}

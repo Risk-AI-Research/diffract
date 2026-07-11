@@ -1,129 +1,168 @@
-"""Generic heatmaps from scalar fields pivoted by metadata keys."""
-
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from typing import Any
 
 import numpy as np
+import plotly.graph_objects as go
 
-from diffract.core.data.nn.params.schema import ParameterType
-from diffract.core.utils import imports as import_utils
-from diffract.session import Session
-from diffract.viz.plots.common import as_float, fetch_data, get_field_value, sort_key
+from diffract.viz.data import (
+    DataType,
+    Entry,
+    FieldRef,
+)
+from diffract.viz.plots.base.axis import AxisType, SupportsAxis
+from diffract.viz.plots.base.coloraxis import SupportsColoraxis
+from diffract.viz.plots.base.plot import Plot
+from diffract.viz.styling import (
+    CategoricalPropertyResolver,
+    NumericPropertyResolver,
+)
 
-if TYPE_CHECKING:  # pragma: no cover
-    import plotly.graph_objects as go  # type: ignore[import-not-found]
 
-    from diffract.viz.themes import Theme
+@dataclass(kw_only=True)
+class HeatmapPlot(
+    Plot,
+    SupportsAxis("x", AxisType.CATEGORICAL),
+    SupportsAxis("y", AxisType.CATEGORICAL),
+    SupportsColoraxis("heatmap"),
+):
+    """Heatmap plot that pivots a scalar field by two categorical dimensions.
 
+    Each cell in the heatmap represents a value of ``z`` at the intersection
+    of a ``y`` row and an ``x`` column.  When multiple entries map to the
+    same (x, y) pair the **last** value wins (no aggregation).
 
-@dataclass(slots=True)
-class HeatmapPivotPlot:
-    """Build a heatmap by pivoting a scalar field by metadata keys.
-
-    Example: if parameters have `layer_id` and `head_id` in metadata,
-    create a layer x head heatmap for any scalar metric.
+    Coloraxis settings (colorscale, cmin/cmax, colorbar) are inherited from
+    the ``SupportsColoraxis("heatmap")`` mixin and can be controlled via
+    ``heatmap_colorscale``, ``heatmap_cmin``, ``heatmap_cmax``, etc.
     """
 
-    value_field: str
-    row_by: str
-    col_by: str
-    title: str | None = None
-    x_title: str | None = None
-    y_title: str | None = None
-    parameter_uids: list[str] | None = None
-    parameter_names: list[str] | None = None
-    model_id: str | None = None
-    model_ids: list[str] | None = None
-    parameter_types: list[str] | None = None
+    z: FieldRef
+    z_rescale_range: tuple[float, float] | None = None
+
+    y: FieldRef
+    x: FieldRef
+
     fill_value: float = float("nan")
+
     show_text: bool = False
     text_format: str = ".2f"
     text_font_size: int = 10
-    colorscale: str = "Viridis"
-    tickangle: int | None = None  # X-axis tick rotation, e.g. -45 or 90
 
-    # Theming
-    theme: Theme | None = None
+    reverse_y: bool = True
 
-    def render(self, session: Session) -> go.Figure:
-        """Render the heatmap using data from the session."""
-        go = import_utils.require("plotly.graph_objects")
-        from diffract.viz.themes import apply_theme
+    def _build_traces_data(
+        self, entries: dict[str, Entry]
+    ) -> dict[str, dict[str, Any]]:
+        """Build a single trace-data dict containing the full z-matrix."""
+        x_resolver = y_resolver = CategoricalPropertyResolver()
+        z_resolver = NumericPropertyResolver(self.z_rescale_range)
 
-        ptypes = (
-            [ParameterType.from_string(p) for p in self.parameter_types]
-            if self.parameter_types
-            else None
-        )
-        model_ids = self.model_ids
-        if model_ids is None and self.model_id is not None:
-            model_ids = [self.model_id]
+        x_ref = replace(self.x, data_type=self.x.data_type or DataType.CATEGORICAL)
+        y_ref = replace(self.y, data_type=self.y.data_type or DataType.CATEGORICAL)
+        x_values = x_resolver.resolve(x_ref, entries)
+        y_values = y_resolver.resolve(y_ref, entries)
+        z_values = z_resolver.resolve(self.z, entries)
 
-        results = fetch_data(
-            session,
-            [self.value_field],
-            parameter_uids=self.parameter_uids,
-            parameter_names=self.parameter_names,
-            parameter_types=ptypes,
-            model_ids=model_ids,
-        )
+        sorted_x = self._get_sorted_unique(x_values, self.x)
+        sorted_y = self._get_sorted_unique(y_values, self.y)
 
-        rows_set: set[Any] = set()
-        cols_set: set[Any] = set()
-        values: dict[tuple[Any, Any], float] = {}
+        cell_values = self._collect_cell_values(x_values, y_values, z_values)
+        z_matrix = self._build_matrix(sorted_x, sorted_y, cell_values)
 
-        for entry in results.values():
-            meta = entry.get("metadata", {})
-            fields = entry.get("fields", {})
-            ctx = {"model_id": meta.get("model_id"), "parameter_name": meta.get("name")}
-            v = as_float(get_field_value(fields, self.value_field, **ctx))
-            if v is None:
+        traces_data: dict[str, dict[str, Any]] = {
+            "heatmap": {
+                "x_labels": sorted_x,
+                "y_labels": sorted_y,
+                "z_matrix": z_matrix,
+            },
+        }
+        return traces_data
+
+    @staticmethod
+    def _get_sorted_unique(values: list[Any], ref: FieldRef) -> list[str]:
+        """Return unique values sorted according to the field's ordering."""
+        unique = list(dict.fromkeys(values))
+        order_indices = ref.ordering.argsort(unique)
+        return [str(unique[i]) for i in order_indices]
+
+    @staticmethod
+    def _collect_cell_values(
+        x_values: list[Any],
+        y_values: list[Any],
+        z_values: list[Any],
+    ) -> dict[tuple[str, str], float]:
+        """Map (x, y) string pairs to scalar z-values."""
+        cell_values: dict[tuple[str, str], float] = {}
+        for x_val, y_val, z_val in zip(x_values, y_values, z_values, strict=False):
+            if z_val is None:
                 continue
+            cell_values[(str(x_val), str(y_val))] = float(z_val)
+        return cell_values
 
-            r = meta.get(self.row_by)
-            c = meta.get(self.col_by)
-            if r is None or c is None:
-                continue
+    def _build_matrix(
+        self,
+        sorted_x: list[str],
+        sorted_y: list[str],
+        cell_values: dict[tuple[str, str], float],
+    ) -> np.ndarray:
+        """Build a 2-D z-matrix (rows=y, cols=x) from cell values."""
+        z_matrix = np.full(
+            (len(sorted_y), len(sorted_x)),
+            self.fill_value,
+            dtype=np.float64,
+        )
+        x_idx = {label: j for j, label in enumerate(sorted_x)}
+        y_idx = {label: i for i, label in enumerate(sorted_y)}
 
-            rows_set.add(r)
-            cols_set.add(c)
-            values[(r, c)] = v
+        for (x_label, y_label), value in cell_values.items():
+            j = x_idx.get(x_label)
+            i = y_idx.get(y_label)
+            if i is not None and j is not None:
+                z_matrix[i, j] = value
 
-        rows = sorted(rows_set, key=sort_key)
-        cols = sorted(cols_set, key=sort_key)
+        return z_matrix
 
-        z = np.full((len(rows), len(cols)), self.fill_value, dtype=np.float64)
-        for i, r in enumerate(rows):
-            for j, c in enumerate(cols):
-                if (r, c) in values:
-                    z[i, j] = values[(r, c)]
+    def _build_figure(self) -> go.Figure:
+        """Build the Plotly figure with a single Heatmap trace."""
+        fig = go.Figure()
 
-        text = None
+        if self._traces_data is None:
+            return fig
+
+        trace_data = self._traces_data["heatmap"]
+        x_labels: list[str] = trace_data["x_labels"]
+        y_labels: list[str] = trace_data["y_labels"]
+        z_matrix: np.ndarray = trace_data["z_matrix"]
+
+        heatmap_kwargs: dict[str, Any] = {
+            "z": z_matrix,
+            "x": x_labels,
+            "y": y_labels,
+            "coloraxis": self.resolve_coloraxis(fig),
+        }
+
         if self.show_text:
             text = np.vectorize(
-                lambda x: ("" if np.isnan(x) else format(x, self.text_format))
-            )(z)
-
-        heatmap_kwargs: dict[str, Any] = dict(
-            z=z,
-            x=[str(c) for c in cols],
-            y=[str(r) for r in rows],
-            coloraxis="coloraxis",
-        )
-        if text is not None:
+                lambda val: "" if np.isnan(val) else format(val, self.text_format),
+            )(z_matrix)
             heatmap_kwargs["text"] = text
             heatmap_kwargs["texttemplate"] = "%{text}"
-            heatmap_kwargs["textfont"] = dict(size=self.text_font_size)
+            heatmap_kwargs["textfont"] = {"size": self.text_font_size}
 
-        fig = go.Figure(data=[go.Heatmap(**heatmap_kwargs)])
-        fig.update_layout(title=self.title or self.value_field, coloraxis=dict(colorscale=self.colorscale))
+        fig.add_trace(go.Heatmap(**heatmap_kwargs))
 
-        xaxis_kwargs: dict[str, Any] = {"title": self.col_by if self.x_title is None else self.x_title}
-        if self.tickangle is not None:
-            xaxis_kwargs["tickangle"] = self.tickangle
-        fig.update_xaxes(**xaxis_kwargs)
+        # Title
+        if self.title:
+            fig.update_layout(title=self.title)
+        else:
+            fig.update_layout(
+                title=f"{self.z.field} by {self.y.field} x {self.x.field}"
+            )
 
-        fig.update_yaxes(title=self.row_by if self.y_title is None else self.y_title, autorange="reversed")
-        return apply_theme(fig, self.theme)
+        # Reverse y-axis so the first row is at the top (matrix convention)
+        if self.reverse_y:
+            fig.update_yaxes(autorange="reversed")
+
+        return fig

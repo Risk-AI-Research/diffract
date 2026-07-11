@@ -1,4 +1,4 @@
-# Use with: session.draw(plot, theme_path="path/to/theme_example.yaml")
+# Use with: session.viz.draw(plot=plot, theme_path="path/to/styling.yaml")
 
 # Fonts
 font_family: "Times New Roman"

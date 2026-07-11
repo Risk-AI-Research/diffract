@@ -1,31 +1,46 @@
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-
 # Diffract: Deep Neural Network Weight Analysis Library
 
-Diffract is a Python package for analyzing deep neural network weights and tracking their evolution over the course of training.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-With a straightforward API and a functional design centered around reusable *kernels*, Diffract automatically resolves dependencies, builds computation graphs, and schedules calculations. Parameters and results are persisted across sessions.
+Diffract is a Python package for analyzing deep neural network weights and tracking
+their evolution over the course of training.
 
-It works seamlessly with popular frameworks such as PyTorch, TensorFlow, Flax, and ONNX.
+With a straightforward API and a functional design centered on reusable _kernels_,
+Diffract automatically resolves dependencies, builds computation graphs, and schedules
+calculations. Parameters and results are persisted across sessions.
+
+It accepts models from PyTorch, TensorFlow, Flax, and ONNX, as well as plain
+dictionaries of NumPy weight matrices.
 
 <br>
 
 ## 🚀 Quick Start
+
+Diffract requires Python 3.12 (uv provisions it automatically):
 
 ```bash
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and install
-git clone ...
+git clone https://github.com/Risk-AI-Research/diffract.git
 cd diffract
 uv sync --extra dev
 ```
 
-### Optional extras
+### Optional Extras
 
-- `uv sync --extra viz` installs Plotly, Kaleido, Hydra, OmegaConf, and PyYAML so the visualization helpers work. This extra is also pulled in by `make test`, which passes `--extra viz` already.
-- `uv sync --extra notebooks` installs notebook-focused tooling (`jupyter`, `matplotlib`, `ipywidgets`) without duplicating the viz-specific packages now centralized in the `viz` extra.
+- `uv sync --extra torch` installs PyTorch, which the Quick Start snippet below relies
+  on.
+- `uv sync --extra frameworks` installs TensorFlow, Flax, and ONNX support.
+- `uv sync --extra viz` installs Plotly, Kaleido, Hydra, OmegaConf, and PyYAML so the
+  visualization helpers work. `make test` passes this extra automatically.
+- `uv sync --extra common` installs the viz stack together with pandas and polars for
+  DataFrame exports.
+- `uv sync --extra taichi` installs Taichi for accelerated heavy-tailed fits and
+  p-value kernels.
+- `uv sync --extra notebooks` installs notebook-focused tooling (`jupyter`,
+  `matplotlib`, `ipywidgets`, `safetensors`, `einops`).
 
 Then use it in your code:
 
@@ -39,46 +54,61 @@ session = Session(profile="ram")
 session = Session(profile="local")
 
 with session:
-    session.add(torch_model, model_id="bert-base")
-    session.compute("frob_norm", "stable_rank")
-    # Returns StructuredExportResult with .scalars and .aggregates attributes
-    results = session.get_results("frob_norm", "stable_rank", export_format="pandas")
-    scalars_df = results.scalars  # DataFrame with per-parameter metrics
-    aggregates_df = results.aggregates  # DataFrame with aggregation results
+    session.models.add(torch_model, model_id="bert-base")
+    session.compute.apply("frob_norm", "stable_rank", "log_norm")
+    # per-parameter metrics
+    metrics_df = session.results.export_metrics(
+        "frob_norm", "stable_rank", export_format="pandas"
+    )
+    # model-level aggregates
+    aggregates_df = session.results.export_aggregates(
+        "log_norm", export_format="pandas"
+    )
 ```
 
-Check out [example notebooks](examples/) and [plot configurations](examples/configs/) for more examples.
+Check out
+[example notebooks](https://github.com/Risk-AI-Research/diffract/tree/main/examples) and
+[plot configurations](https://github.com/Risk-AI-Research/diffract/tree/main/examples/configs)
+for more examples. The
+[notebooks](https://github.com/Risk-AI-Research/diffract/tree/main/notebooks) directory
+contains `compare_two_checkpoints.ipynb`, an end-to-end walkthrough.
 
 <br>
 
 ## 🤔 Why Diffract?
 
-Neural networks often feel like black boxes. Diffract provides tools to analyze their internal structure:
+Neural networks often feel like black boxes. Diffract provides tools to analyze their
+internal structure:
 
 - **Training Insights**: Track how weights evolve across training epochs.
 - **Architecture Analysis**: Compare different model architectures objectively.
 - **Initialization Studies**: Evaluate the impact of initialization methods.
 - **Spectral Analysis**: Compute empirical spectral distributions, ranks, and norms.
-- **Heavy-Tailed Distributions**: Detect power-law and exponential tails in weight spectra.
+- **Heavy-Tailed Distributions**: Detect power-law and exponential tails in weight
+  spectra.
 
 <br>
 
 ## 🔑 Key Features
 
-- **Session-based API**: Simple `add`, `compute`, and `get_results` workflow.
+- **Session-based API**: Simple `models.add`, `compute.apply`, and
+  `results.export_metrics` workflow.
 
-- **Kernels**: Reusable functions that compute model characteristics—ranks, norms, spectral properties. Dependencies are resolved automatically.
+- **Kernels**: Reusable functions that compute model characteristics—ranks, norms,
+  spectral properties—stored as named _fields_ on each parameter. Dependencies are
+  resolved automatically.
 
-- **Persistent Storage**: Parameters and results survive between sessions. Supports HDF5, SQLite, Zarr, and hybrid backends.
+- **Persistent Storage**: Parameters and results survive between sessions. Supports
+  HDF5, SQLite, Zarr, and hybrid backends.
 
-- **Flexible Aggregation Levels**: Kernels can work at multiple levels:
-
+- **Kernel Apply Levels**: Kernels can work at multiple levels:
   - **PARAMETER** - Operate on individual weight matrices.
-  - **MODEL** - Aggregate across all parameters in a model.
+  - **IN_MODEL** - Aggregate within a single model.
+  - **CROSS_MODEL** - Compare or aggregate across models.
 
 - **Built-in Visualization**: Publication-ready Plotly plots with theming support.
 
-- **Export Formats**: Get results in pandas, polars, dict, or JSON formats.
+- **Export Formats**: Get results as `pandas`, `polars`, `dict`, `json`, or `list`.
 
 <br>
 
@@ -88,17 +118,20 @@ Neural networks often feel like black boxes. Diffract provides tools to analyze 
 
 Add models from various frameworks to a session:
 
+<!-- skip: next -->
+
 ```python
 from diffract import Session
 
 session = Session()
 
 with session:
-    session.add(torch_model)  # torch.nn.Module
-    session.add(torch_state_dict, model_id="checkpoint")  # Dict[str, torch.Tensor]
-    session.add(onnx_model, model_id="onnx-model")  # onnx.ModelProto
-    session.add(flax_model, model_id="flax-model")  # flax.linen.Module
-    session.add(tf_model, model_id="tf-model")  # TensorFlow model
+    session.models.add(torch_model)  # torch.nn.Module
+    session.models.add(torch_state_dict, model_id="checkpoint")  # Dict[str, torch.Tensor]
+    session.models.add(numpy_weights, model_id="raw-weights")  # Dict[str, np.ndarray]
+    session.models.add(onnx_model, model_id="onnx-model")  # onnx.ModelProto
+    session.models.add(flax_model, model_id="flax-model")  # flax.linen.Module
+    session.models.add(tf_model, model_id="tf-model")  # TensorFlow model
 ```
 
 ### Computing Metrics
@@ -106,8 +139,8 @@ with session:
 Dependencies are resolved automatically:
 
 ```python
-session.compute("frob_norm", "stable_rank")
-session.compute("pl_ks")  # has many dependencies—all resolved automatically
+session.compute.apply("frob_norm", "stable_rank")
+session.compute.apply("pl_ks")  # has many dependencies—all resolved automatically
 ```
 
 ### Filtering Parameters
@@ -115,8 +148,7 @@ session.compute("pl_ks")  # has many dependencies—all resolved automatically
 Filter computations by model, parameter type, or name:
 
 ```python
-from diffract import Session, ParameterOverrides
-from diffract.core.data.nn.parameter import ParameterType
+from diffract import ParameterOverrides, ParameterType, Session
 
 session = Session()
 
@@ -128,49 +160,58 @@ overrides = {
 }
 
 with session:
-    session.add(model, model_id="gpt", parameter_overrides=overrides)
-    session.compute("frob_norm", model_ids=["gpt"])
-    session.compute("frob_norm", parameter_types=[ParameterType.from_string("attn")])
-    session.compute("frob_norm", parameter_names=["q", "k"])
+    session.models.add(model, model_id="gpt", parameter_overrides=overrides)
+    session.compute.apply("frob_norm")
+
+# Scope work to a subset with session.filter(...)
+gpt = session.filter(model_ids=["gpt"])
+with gpt:
+    gpt.compute.apply("frob_norm")
+
+attn = session.filter(param_types=[ParameterType.from_string("attn")])
+with attn:
+    attn.results.export_metrics("frob_norm")
 ```
 
 ### Retrieving Results
 
-Export results in various formats (pandas, polars, dict, or json):
+Export results in various formats (`pandas`, `polars`, `dict`, `json`, or `list`):
 
 ```python
-results = session.get_results("stable_rank", export_format="pandas")
-# Returns StructuredExportResult with separate scalars and aggregates:
-# - scalars: DataFrame with per-parameter metrics
-# - aggregates: DataFrame with aggregation/cross-entity results
-scalars_df = results.scalars
-aggregates_df = results.aggregates
+scalars_df = session.results.export_metrics("stable_rank", export_format="pandas")
+aggregates_df = session.results.export_aggregates(
+    "stable_rank", export_format="pandas"
+)
 
 # Other formats work the same way
-results = session.get_results("stable_rank", export_format="polars")
-results = session.get_results("stable_rank", export_format="dict")
-results = session.get_results("stable_rank", export_format="json")
+results = session.results.export_metrics("stable_rank", export_format="polars")
+results = session.results.export_metrics("stable_rank", export_format="dict")
+results = session.results.export_metrics("stable_rank", export_format="json")
+results = session.results.export_metrics("stable_rank", export_format="list")
 ```
 
 ### Visualization
 
 Create publication-ready Plotly plots:
 
-```python
-from diffract.viz.plots import BoxPlot, ScatterPlot
-from diffract.viz.themes import DEFAULT_THEME
+<!-- skip: next -->
 
-# Create and render plots using the session.draw() method
-session.draw(plot=BoxPlot(field="stable_rank", theme=DEFAULT_THEME)).show()
-session.draw(plot=ScatterPlot(x_field="frob_norm", y_field="stable_rank")).show()
+```python
+from diffract.viz import DEFAULT_THEME
+
+# Ergonomic helpers on session.viz accept field names directly
+session.viz.box(y="stable_rank", x="model_id", theme=DEFAULT_THEME).show()
+session.viz.scatter(x="frob_norm", y="stable_rank").show()
 ```
 
 ### YAML-Driven Plotting
 
 Define complex visualizations via Hydra configs:
 
+<!-- skip: next -->
+
 ```python
-session.draw(config_path="examples/configs/boxplot_stable_rank.yaml").show()
+session.viz.draw(config_path="examples/configs/boxplot_stable_rank.yaml").show()
 ```
 
 ### Kernel Configuration
@@ -178,30 +219,32 @@ session.draw(config_path="examples/configs/boxplot_stable_rank.yaml").show()
 List and configure kernels at runtime:
 
 ```python
-session.list_kernels(verbose=True)
-session.list_fields_can_compute(verbose=True)
-session.configure_kernel("hard_rank", threshold=1e-6)
+session.compute.list_available_kernels(verbose=True)
+session.compute.list_available_metrics(verbose=True)
+session.compute.configure_kernel("hard_rank", threshold=1e-6)
 ```
 
 ### Session Management
 
-Data persists automatically—parameters and results survive between runs:
+Parameters and results stay available whenever the session is reopened. `Session()`
+defaults to the in-memory `ram` profile; pick a persistent profile such as `local` or
+`hybrid` to keep data across separate runs:
 
 ```python
 from diffract import Session
 
-session = Session()
+session = Session()  # in-memory; use profile="local" to persist across runs
 
-# First run: add models and compute
+# Add models and compute
 with session:
-    session.add(model, model_id="my-model")
-    session.compute("frob_norm")
+    session.models.add(model, model_id="my-model")
+    session.compute.apply("frob_norm")
 
-# Later: data persists across runs
+# Reopen the session: earlier results are still there
 with session:
-    results = session.get_results("frob_norm", export_format="pandas")
-    session.list_models()
-    session.erase_models("old-model")
+    results = session.results.export_metrics("frob_norm", export_format="pandas")
+    session.models.list()
+    session.models.erase("my-model")
 ```
 
 ### Custom Kernels
@@ -215,21 +258,21 @@ session = Session()
 
 with session:
     # Define and register a custom kernel
-    @session.kernel()
+    @session.compute.kernel()
     def my_custom_metric(frob_norm: float, *, scaling_factor: float = 1.0) -> float:
-        """Custom metric that scales frobenius norm."""
+        """Custom metric that scales the Frobenius norm."""
         return frob_norm * scaling_factor
 
-    session.add(my_model)
-    session.configure_kernel("my_custom_metric", scaling_factor=2.0)
-    session.compute("my_custom_metric")
+    session.models.add(my_model)
+    session.compute.configure_kernel("my_custom_metric", scaling_factor=2.0)
+    session.compute.apply("my_custom_metric")
 ```
 
-You can also customize kernel parameters:
+You can also override the registered name and output fields:
 
 ```python
 with session:
-    @session.kernel(name="scaled_metric", produce_fields=["scaled_result"])
+    @session.compute.kernel(name="scaled_metric", produce_fields=["scaled_result"])
     def custom_analysis(frob_norm: float, stable_rank: float, *, weight: float = 0.5) -> float:
         """Custom analysis combining multiple metrics."""
         return weight * frob_norm + (1 - weight) * stable_rank
@@ -237,11 +280,14 @@ with session:
 
 ### Available Kernels
 
-Diffract includes kernels for norms, ranks, spectral analysis, heavy-tailed fits, and more. Run `session.list_kernels(verbose=True)` to list them all.
+Diffract includes kernels for norms, ranks, spectral analysis, heavy-tailed fits, and
+more. Run `session.compute.list_available_kernels(verbose=True)` to list them all.
 
 ### Merging Sessions
 
 Merge parameters and results from another session:
+
+<!-- skip: next -->
 
 ```python
 from diffract import Session
@@ -250,23 +296,23 @@ session1 = Session(config_path="config1.ini")
 session2 = Session(config_path="config2.ini")
 
 with session1:
-    session1.add(model1, model_id="model-a")
-    session1.compute("frob_norm")
+    session1.models.add(model1, model_id="model-a")
+    session1.compute.apply("frob_norm")
 
 with session2:
-    session2.add(model2, model_id="model-b")
-    session2.merge(session1, fields=["frob_norm"])
+    session2.models.add(model2, model_id="model-b")
+    session2.utils.merge_other_session(session1, fields=["frob_norm"])
 ```
 
 ### Configuration
 
 Diffract offers built-in **profiles** for common setups:
 
-| Profile | Storage | Cache | Use case |
-|---------|---------|-------|----------|
-| `ram` | RAM | None | Quick experiments, no persistence |
-| `local` | SQLite | Simple LRU | Local development, persistent |
-| `hybrid` | SQLite + HDF5 | Simple LRU | Large models, optimized arrays |
+| Profile  | Storage       | Cache      | Use case                          |
+| -------- | ------------- | ---------- | --------------------------------- |
+| `ram`    | RAM           | None       | Quick experiments, no persistence |
+| `local`  | SQLite        | Simple LRU | Local development, persistent     |
+| `hybrid` | SQLite + HDF5 | Simple LRU | Large models, optimized arrays    |
 
 ```python
 from diffract import Session
@@ -280,11 +326,13 @@ session = Session(profile="hybrid")   # persistent, optimized for large arrays
 session = Session(config_path="my_config.ini")
 ```
 
-**Tip**: Start with a profile, then switch to a config file when you need reproducibility or custom settings.
+**Tip**: Start with a profile, then switch to a config file when you need
+reproducibility or custom settings.
 
 #### Advanced Configuration
 
-For production or reproducible experiments, use INI config files. See `configs/` for examples:
+For production or reproducible experiments, use INI config files. See
+`src/diffract/configs/` for examples:
 
 ```ini
 [storage]
@@ -296,7 +344,7 @@ path = "data/diffract.db"
 [cache]
 backend = "simple"
 
-[compute.executor]
+[parallel.thread_pool]
 max_workers = 4
 ```
 
@@ -306,7 +354,7 @@ max_workers = 4
 - **SQLite**: Lightweight database for metadata and arrays
 - **HDF5**: Optimized for large numerical arrays with compression
 - **Zarr**: Cloud-optimized array storage for large-scale data
-- **Hybrid**: SQLite (metadata) + HDF5/Zarr (arrays) — best of both
+- **Hybrid**: SQLite (metadata) + HDF5/Zarr (arrays)
 
 #### Cache Backends
 
@@ -314,21 +362,39 @@ max_workers = 4
 - **Redis**: Distributed caching (requires `redis` extra)
 - **None**: Disable caching
 
+<br>
+
 ## 📚 Documentation
 
-The documentation site is sourced from `docs/` and built with Sphinx + MyST.
-Install the tooling via `uv sync --extra docs` and run `make docs` to render the HTML locally.
+The documentation site is sourced from `docs/` and built with Sphinx + MyST. Install the
+tooling via `uv sync --extra docs` and run `make docs` to render the HTML locally.
+
+<br>
+
+## 📝 Citation
+
+If you use Diffract or build on the paper, please cite:
+
+```bibtex
+@inproceedings{borodin2026diffract,
+  title     = {Diffract: Spectral View of {LLM} Domain Adaptation},
+  author    = {Nikita Borodin and Maria Krylova and Artem Zabolotnyi and Dmitry Aspisov and Egor Shikov and Nikita Tyuplyaev and Oleg Travkin and Roman Alferov and Dmitry Vinichenko},
+  booktitle = {Forty-third International Conference on Machine Learning},
+  year      = {2026},
+  url       = {https://openreview.net/forum?id=XBUHoiAGDE}
+}
+```
 
 <br>
 
 ## ❤️ Contributions
 
-Contributions are welcome! Fork the repo, create a feature branch, and submit a PR. Use `make lint` and `make test` to validate your changes.
+Contributions are welcome! Fork the repo, create a feature branch, and submit a PR. Use
+`make lint` and `make test` to validate your changes.
 
 <br>
 
-## License
+## 📄 License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
-
-Copyright 2026 Risk AI Research.
+Licensed under the Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Risk AI
+Research.

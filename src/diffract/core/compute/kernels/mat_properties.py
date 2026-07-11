@@ -7,21 +7,15 @@ from diffract.core.compute.decorator import kernel
 
 
 @kernel
-def shape(weights: NDArray[np.floating[Any]]) -> NDArray[int]:
-    """Get matrix shape as array."""
-    return np.array(weights.shape)
-
-
-@kernel
-def greater_dim(shape: NDArray[int]) -> int:
+def greater_dim(weights: NDArray[int]) -> int:
     """Get greater dimension from shape."""
-    return shape.max()
+    return max(weights.shape)
 
 
 @kernel
-def lower_dim(shape: NDArray[int]) -> int:
+def lower_dim(weights: NDArray[int]) -> int:
     """Get lower dimension from shape."""
-    return shape.min()
+    return min(weights.shape)
 
 
 @kernel

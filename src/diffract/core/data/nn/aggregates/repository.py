@@ -6,6 +6,8 @@ aggregate data storage and membership.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from diffract.core.constants import TABLE_AGGREGATES
 from diffract.core.data.repository import DataRepository
 
@@ -27,12 +29,12 @@ class AggregateRepository(DataRepository[AggregateMetadata, AggregateProxy]):
     TABLE = TABLE_AGGREGATES
 
     # Schema for MetadataIndex
-    METADATA_COLUMNS = {
+    METADATA_COLUMNS: ClassVar[dict[str, type]] = {
         "field_name": str,
         "context_models": str,  # JSON-serialized tuple
         "context_params": str,  # JSON-serialized tuple
     }
-    METADATA_INDEXES = ["field_name"]
+    METADATA_INDEXES: ClassVar[list[str]] = ["field_name"]
 
     def get_or_create(
         self,
@@ -73,7 +75,7 @@ class AggregateRepository(DataRepository[AggregateMetadata, AggregateProxy]):
             context_models=context_models,
             context_params=context_params,
         )
-        
+
         return AggregateProxy.create_and_store(meta=meta, repository=self)
 
     def create_view(self) -> AggregateView:

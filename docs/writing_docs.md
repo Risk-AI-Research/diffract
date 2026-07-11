@@ -55,7 +55,7 @@ def my_function(param1: str, param2: int) -> bool:
 
 2. **Add it to the reference** by creating or updating a file in `docs/reference/`:
 
-```markdown
+````markdown
 # Session module
 
 ```{eval-rst}
@@ -64,11 +64,11 @@ def my_function(param1: str, param2: int) -> bool:
    :undoc-members:
    :show-inheritance:
 ```
-```
+````
 
 Or for a specific class:
 
-```markdown
+````markdown
 # Session
 
 ```{eval-rst}
@@ -76,7 +76,7 @@ Or for a specific class:
    :members:
    :show-inheritance:
 ```
-```
+````
 
 **Important:** Use `eval-rst` directive when using RST autodoc directives in Markdown files.
 
@@ -103,7 +103,7 @@ You can use:
 - RST directives via `{eval-rst}` blocks
 - Grid layouts with `sphinx-design`:
 
-```markdown
+````markdown
 ```{grid} 2
 :gutter: 2
 
@@ -114,6 +114,7 @@ You can use:
 Card content.
 ```
 ```
+````
 
 ## Tips
 

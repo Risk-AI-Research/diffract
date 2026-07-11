@@ -1,0 +1,10 @@
+# @package templates
+
+
+defaults:
+  - box.yaml
+  - sparkline.yaml
+  - scatter.yaml
+  - heatmap.yaml
+  - violin.yaml
+  - _self_

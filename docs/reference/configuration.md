@@ -21,12 +21,12 @@ session = Session(profile="hybrid")
 | Profile | Storage | Cache | Use case |
 |---------|---------|-------|----------|
 | `ram` | RAM | none | Quick experiments, no persistence |
-| `local` | SQLite | Redis | Local development with persistence |
-| `hybrid` | SQLite + HDF5 | Redis | Large models, optimized array storage |
+| `local` | SQLite | simple (in-memory LRU) | Local development with persistence |
+| `hybrid` | SQLite + HDF5 | simple (in-memory LRU) | Large models, optimized array storage |
 
 **Notes:**
 
-- **Redis is optional**: `local` and `hybrid` default to Redis cache. Use a config file with `cache.backend = "simple"` if you don't want Redis.
+- **Redis is optional**: the built-in profiles use the `simple` in-memory cache. Use a config file with `cache.backend = "redis"` if you want a shared Redis cache instead.
 - **Relative paths** are resolved against your current working directory.
 
 For backend details and recommended setups, see [Storage and Cache](../guide/recipes/storage_and_cache.md).
@@ -75,15 +75,23 @@ backend = "sqlite"
 [storage.sqlite]
 path = "data/diffract.db"
 
+[metadata]
+backend = "sqlite"
+
+[metadata.sqlite]
+path = "data/metadata.db"
+
 [cache]
 backend = "simple"
 
 [cache.simple]
 max_memory_mb = 256
 
-[compute.executor]
-max_workers = 4
-chunk_size = 32
+[parallel.thread_pool]
+max_workers = 8
+
+[parallel.process_pool]
+max_workers = 8
 ```
 
 ### Redis cache
@@ -106,11 +114,22 @@ key_prefix = "diffract:cache:"
 [storage]
 backend = "hybrid"
 
+[storage.hybrid]
+light = "sqlite"
+heavy = "hdf5"
+array_threshold = 1048576
+
 [storage.sqlite]
-path = "data/metadata.db"
+path = "data/sqlite_storage.db"
 
 [storage.hdf5]
 path = "data/arrays.h5"
+
+[metadata]
+backend = "sqlite"
+
+[metadata.sqlite]
+path = "data/metadata.db"
 
 [cache]
 backend = "simple"
@@ -121,11 +140,11 @@ max_memory_mb = 512
 
 ## Example configs
 
-The repository includes ready-to-use configs in `configs/`:
+The package ships ready-to-use configs in `src/diffract/configs/` (these back the built-in profiles):
 
-- `fast_speed_without_disk.ini` — RAM storage, no cache
-- `sqlite.ini` — SQLite + Redis
-- `hybrid.ini` — Hybrid + Redis
+- `fast_speed_without_disk.ini` — RAM storage, no cache (`ram` profile)
+- `sqlite.ini` — SQLite storage + simple cache (`local` profile)
+- `hybrid.ini` — Hybrid SQLite/HDF5 storage + simple cache (`hybrid` profile)
 
 ## Priority order
 

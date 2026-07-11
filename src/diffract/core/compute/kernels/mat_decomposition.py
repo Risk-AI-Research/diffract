@@ -1,3 +1,4 @@
+import functools
 from typing import Any, cast
 
 import numpy as np
@@ -41,9 +42,10 @@ def svd(
 ]:
     """Compute SVD decomposition of matrix."""
     if IS_CUDA_AVAILABLE and allow_cuda:
-        u, svals, vt = torch_cuda_wrapper(mat, torch.linalg.svd)
+        svd_fn = functools.partial(torch.linalg.svd, full_matrices=False)
+        u, svals, vt = torch_cuda_wrapper(mat, svd_fn)
     else:
-        u, svals, vt = np.linalg.svd(mat, compute_uv=True)
+        u, svals, vt = np.linalg.svd(mat, full_matrices=False)
 
     svals = np.abs(svals.real).flatten()
     svals_argsort_index = np.argsort(svals)

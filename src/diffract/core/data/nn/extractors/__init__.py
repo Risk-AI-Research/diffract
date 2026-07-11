@@ -13,6 +13,7 @@ Key Features:
     - Extensible architecture for new frameworks and parameter types
 
 Supported Frameworks:
+    - NumPy: dict[str, numpy.ndarray] mappings (no framework required)
     - PyTorch: nn.Module and state_dict extraction
     - Extensible design for additional frameworks
 
@@ -26,6 +27,7 @@ from .base import BaseParameterExtractor, ExtractorOverrides, ParameterOverrides
 from .factory import create_extractor, get_supported_frameworks, get_supported_types
 from .flax import FlaxParamsExtractor
 from .interface import IParameterExtractor
+from .numpy import NumpyDictExtractor
 from .onnx import OnnxModelExtractor
 from .tensorflow import TensorFlowModelExtractor
 from .torch import TorchModuleExtractor, TorchStateDictExtractor
@@ -35,6 +37,7 @@ __all__ = [
     "ExtractorOverrides",
     "FlaxParamsExtractor",
     "IParameterExtractor",
+    "NumpyDictExtractor",
     "OnnxModelExtractor",
     "ParameterOverrides",
     "TensorFlowModelExtractor",

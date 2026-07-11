@@ -4,12 +4,13 @@ Diffract is a Python library for analyzing deep neural network weights and track
 
 ## Installation
 
-Install the core package:
+Diffract requires Python 3.12 (uv provisions it automatically). Clone the
+repository and install with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install diffract
-# or with uv
-uv sync
+git clone https://github.com/Risk-AI-Research/diffract.git
+cd diffract
+uv sync --extra dev
 ```
 
 ### Optional extras
@@ -20,20 +21,21 @@ uv sync
 | `tensorflow` | TensorFlow/Keras model support |
 | `flax` | Flax/JAX model support |
 | `onnx` | ONNX model support |
+| `frameworks` | TensorFlow + Flax + ONNX bundle |
 | `viz` | Plotly visualization helpers |
 | `pandas` | Export to pandas DataFrames |
 | `polars` | Export to polars DataFrames |
 | `redis` | Redis cache backend |
 | `zarr` | Zarr storage backend (cloud-native arrays via fsspec) |
+| `taichi` | Taichi-accelerated heavy-tailed fitting and bootstrap p-value kernels |
 | `common` | viz + pandas + polars (recommended) |
+| `notebooks` | Dependencies for the example notebooks |
 | `docs` | Build this documentation |
 
 Install extras with:
 
 ```bash
 uv sync --extra torch --extra common
-# or
-pip install "diffract[torch,common]"
 ```
 
 ## Start here
@@ -52,7 +54,7 @@ What Diffract is, core concepts, and when to use it.
 :link: guide/quickstart
 :link-type: doc
 
-5-minute tour: `Session → add → compute → get_results → draw`.
+5-minute tour: `Session → models.add → compute.apply → results.export_metrics → viz.draw`.
 :::
 
 :::{grid-item-card} Recipes

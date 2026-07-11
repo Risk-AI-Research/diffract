@@ -82,13 +82,13 @@ class CkptInfo:
     path: str = field(default_factory=lambda: DefaultValues.MISSING_STR_PLACEHOLDER)
 
     # from path
-    arch: ArchType = field(default=ArchType.OTHER)
-
-    # from config.json
-    d_model: int = field(default_factory=lambda: DefaultValues.MISSING_INT_PLACEHOLDER)
+    arch: str = field(default=ArchType.OTHER.value)
+    model_size: str = field(default_factory=lambda: DefaultValues.MISSING_STR_PLACEHOLDER)
+    task: str = field(default_factory=lambda: DefaultValues.MISSING_STR_PLACEHOLDER)
+    lr: float = field(default_factory=lambda: DefaultValues.MISSING_FLOAT_PLACEHOLDER)
+    pretrain_step: int = field(default_factory=lambda: DefaultValues.MISSING_INT_PLACEHOLDER)
     n_head: int = field(default_factory=lambda: DefaultValues.MISSING_INT_PLACEHOLDER)
-    n_layer: int = field(default_factory=lambda: DefaultValues.MISSING_INT_PLACEHOLDER)
-
+    
     def __le__(self, other):
         return hash(self) <= hash(other)
 
@@ -158,29 +158,46 @@ class CkptLoader:
                 val = OmegaConf.select(run_cfg, field, default=None)
             except:
                 ...
+                
+        if match := re.fullmatch(fr".*{field}=([^-_\(\)\.]+).*", self.path):
+            val = next(iter(match.groups()))
 
         return val
 
     def _resolve_path(self) -> str:
         return self.path
 
-    def _resolve_arch(self) -> ArchType:
-        return ArchType.OLMO
+    def _resolve_arch(self) -> str:
+        return ArchType.OLMO.value
     
-    def _resolve_d_model(self) -> int:
-        return 2048
+    def _resolve_lr(self) -> float | None:
+        lr_str: str | None = self._default_resolve("lr")
+        
+        if lr_str is None:
+            return None
+            
+        lr = float(lr_str.replace("e", "e-"))
+        return lr
+    
+    def _resolve_pretrain_step(self) -> int | None:
+        pretrain_step_str: str | None = self._default_resolve("pretrain_step")
 
-    def _resolve_n_head(self) -> int:
-        return 16
+        if pretrain_step_str is None:
+            return None
 
-    def _resolve_n_layer(self) -> int:
-        return 16
-    
-    def _resolve_ckpt_type(self) -> CkptType:
-        return CkptType.WEIGHTS
-    
-    def _resolve_diff_pattern(self) -> str:
-        return DefaultValues.MISSING_STR_PLACEHOLDER
+        pretrain_step = int(pretrain_step_str.replace("k", "000"))
+        return pretrain_step
+
+    def _resolve_n_head(self) -> int | None:
+        # HF transformer configs name this field num_attention_heads.
+        n_head_str = self._default_resolve("n_head")
+        if n_head_str is None:
+            n_head_str = self._default_resolve("num_attention_heads")
+
+        if n_head_str is None:
+            return None
+
+        return int(n_head_str)
 
 
 class CkptFilter:

@@ -1,4 +1,9 @@
-from .alignment import max_vector_agreement, overlap, svs_similarity, vector_agreement
+from .alignment import (
+    avg_vector_agreement,
+    max_vector_agreement,
+    overlap,
+    vector_agreement,
+)
 from .heavy_tailed import (
     expon_p_value,
     exponential_fit,

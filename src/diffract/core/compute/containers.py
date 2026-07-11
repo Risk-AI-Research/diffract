@@ -13,19 +13,16 @@ Example:
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from dependency_injector import containers, providers
 
-from diffract.core.compute.parallel import ParallelContext
+from diffract.core.parallel import ParallelContext
 from diffract.core.utils.build import build_with_defaults
 
 from .decorator import register_default_kernels
 from .execution import KernelExecutor
 from .registry import KernelRegistry
-
-if TYPE_CHECKING:
-    from diffract.core.data.nn.aggregates import AggregateRepository
 
 
 class ComputeSingletonContainer(containers.DeclarativeContainer):
@@ -33,7 +30,9 @@ class ComputeSingletonContainer(containers.DeclarativeContainer):
 
     kernel_registry = providers.Singleton(KernelRegistry)
 
-    register_default_kernels = providers.Callable(register_default_kernels)
+    register_default_kernels = providers.Callable(
+        register_default_kernels, kernel_registry
+    )
 
 
 def _config_to_dict(cfg: dict | None) -> dict:

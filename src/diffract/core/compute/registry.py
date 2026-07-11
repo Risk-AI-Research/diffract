@@ -114,6 +114,8 @@ class KernelRegistry:
             config: Configuration parameters with defaults.
             info: Optional documentation metadata.
         """
+        if not isinstance(config, KernelConfig):
+            config = KernelConfig(**(config or {}))
         cfg = deepcopy(config)
         info = KernelInfo() if info is None else info
         meta = KernelMetadata(
@@ -187,15 +189,21 @@ class KernelRegistry:
             else list(self._metadata.keys())
         )
 
-    def list_fields_can_produce(self) -> list[str]:
+    def list_fields_can_produce(self, verbose: bool = False) -> list[str]:
         """List all fields that registered kernels can produce.
 
+        Args:
+            verbose: If True, annotate each field with its producing kernel.
+
         Returns:
-            Sorted list of field names that can be produced.
+            Sorted list of field names, or "field <- kernel" strings.
         """
         can_produce_fields: list[str] = []
-        for kernel_meta in self._metadata.values():
-            can_produce_fields.extend(kernel_meta.produce_fields)
+        for kernel_name, kernel_meta in self._metadata.items():
+            can_produce_fields.extend(
+                f"{field} <- {kernel_name}" if verbose else field
+                for field in kernel_meta.produce_fields
+            )
         return sorted(can_produce_fields)
 
     def has_kernel(self, name: str) -> bool:
@@ -416,6 +424,24 @@ class KernelRegistry:
             if field_name in kernel_meta.produce_fields:
                 return kernel
         raise ValueError
+
+    def resolve_produced_fields(self, field_or_kernel_name: str) -> set[str]:
+        """Get all fields that will be produced when computing a field or kernel.
+
+        Resolves the dependency chain and collects all fields produced by
+        all kernels in the chain (including intermediate dependencies).
+
+        Args:
+            field_or_kernel_name: Field name or kernel name to resolve.
+
+        Returns:
+            Set of all field names that will be produced.
+        """
+        kernel_chain = self.resolve_dependencies(field_or_kernel_name)
+        produced: set[str] = set()
+        for kernel_name in kernel_chain:
+            produced.update(self._get(kernel_name).produce_fields)
+        return produced
 
     def normalize_kernel_result(self, kernel_name: str, result: Any) -> dict[str, Any]:
         """Normalize kernel outputs to a mapping of produced fields to values.

@@ -54,5 +54,4 @@ class AggregateProxy(DataProxy[AggregateMetadata]):
         Returns:
             New aggregate proxy with metadata stored.
         """
-        proxy = super().create_and_store(meta=meta, repository=repository)
-        return proxy  # type: ignore[return-value]
+        return super().create_and_store(meta=meta, repository=repository)

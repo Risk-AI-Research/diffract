@@ -20,7 +20,7 @@ project = "Diffract"
 try:
     release = get_version("diffract")
 except PackageNotFoundError:
-    release = "0.1.0"
+    release = "0.2.0"
 version = release
 
 extensions = [
@@ -45,14 +45,13 @@ html_title = "Diffract"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 
-# Removed for anonymized submission
-# html_theme_options = {
-#     "source_repository": "https://github.com/...",
-#     "source_branch": "main",
-#     "source_directory": "docs/",
-#     "navigation_with_keys": True,
-#     "top_of_page_buttons": ["edit", "view"],
-# }
+html_theme_options = {
+    "source_repository": "https://github.com/Risk-AI-Research/diffract",
+    "source_branch": "main",
+    "source_directory": "docs/",
+    "navigation_with_keys": True,
+    "top_of_page_buttons": ["edit", "view"],
+}
 
 myst_enable_extensions = ["deflist", "colon_fence", "attrs_inline"]
 myst_heading_anchors = 2

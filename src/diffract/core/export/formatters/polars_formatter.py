@@ -34,6 +34,7 @@ if not import_utils.is_available("polars"):
         """Stub formatter that raises when polars is unavailable."""
 
         def __new__(cls, *_args: Any, **_kwargs: Any) -> Self:
+            """Raise ImportError because polars is not installed."""
             msg = "polars package not available"
             raise ImportError(msg)
 
@@ -68,8 +69,16 @@ else:
             scalar_records = build_scalar_records(param_results)
             aggregate_records = build_aggregate_records(aggregate_results)
 
-            scalars_df = pl.DataFrame(scalar_records) if scalar_records else pl.DataFrame({c: [] for c in [*SCALAR_COLUMNS, *fields]})
-            aggregates_df = pl.DataFrame(aggregate_records) if aggregate_records else pl.DataFrame({c: [] for c in AGGREGATE_COLUMNS})
+            scalars_df = (
+                pl.DataFrame(scalar_records)
+                if scalar_records
+                else pl.DataFrame({c: [] for c in [*SCALAR_COLUMNS, *fields]})
+            )
+            aggregates_df = (
+                pl.DataFrame(aggregate_records)
+                if aggregate_records
+                else pl.DataFrame({c: [] for c in AGGREGATE_COLUMNS})
+            )
 
             return StructuredExportResult(
                 scalars=scalars_df,

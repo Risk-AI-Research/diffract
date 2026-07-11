@@ -96,7 +96,7 @@ class FakeCache:
         return (obj_uid, field_name) in self._cache
 
     def erase_field(self, obj_uid: str, field_name: str) -> None:
-        del self._cache[(obj_uid, field_name)]
+        self._cache.pop((obj_uid, field_name), None)
 
     def erase_field_for_all(self, field_name: str) -> None:
         keys_to_remove = [k for k in self._cache if k[1] == field_name]
@@ -297,10 +297,13 @@ def test_parameter_metadata_uid_and_fields():
     assert isinstance(m.other_meta, dict)
 
 
-def test_parameter_metadata_to_index_dict():
+def test_parameter_metadata_to_dict():
     m = ParameterMetadata(name="w", ptype=ParameterType.DENSE, model_id="m1")
-    index_dict = m.to_index_dict()
-    assert index_dict == {"name": "w", "model_id": "m1", "ptype": "DENSE"}
+    d = m.to_dict()
+    assert d["name"] == "w"
+    assert d["model_id"] == "m1"
+    assert d["ptype"] == "DENSE"
+    assert "uid" in d
 
 
 # ---------------------- Tests: ParameterDataProxy ----------------------

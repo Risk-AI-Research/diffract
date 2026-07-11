@@ -23,9 +23,9 @@ class RAMStorageManager(IStorageManager):
     """RAM-only storage manager with table support."""
 
     def __init__(self) -> None:
-        # Structure: {(table, field_name): {obj_uid: value}}
+        # Maps a table and field name to a mapping from object uid to value.
         self._storage: dict[tuple[str, str], dict[UID, Any]] = {}
-        # Structure: {(table, field_name, obj_uid): metadata}
+        # Maps a table, field name and object uid to that value's metadata.
         self._metadata: dict[tuple[str, str, UID], dict[str, Any]] = {}
 
     def _key(self, table: str, field_name: str) -> tuple[str, str]:
@@ -51,11 +51,7 @@ class RAMStorageManager(IStorageManager):
     ) -> list[str]:
         """List field names (optionally only those containing the given object)."""
         if obj_uid is None:
-            return [
-                field_name
-                for (tbl, field_name) in self._storage
-                if tbl == table
-            ]
+            return [field_name for (tbl, field_name) in self._storage if tbl == table]
         return [
             field_name
             for (tbl, field_name), objs in self._storage.items()
@@ -122,10 +118,7 @@ class RAMStorageManager(IStorageManager):
         key = self._key(table, field_name)
         if key in self._storage:
             del self._storage[key]
-        to_delete = [
-            k for k in self._metadata
-            if k[0] == table and k[1] == field_name
-        ]
+        to_delete = [k for k in self._metadata if k[0] == table and k[1] == field_name]
         for k in to_delete:
             del self._metadata[k]
 

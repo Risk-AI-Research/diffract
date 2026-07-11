@@ -6,6 +6,8 @@ DataRepository with parameter-specific functionality.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from diffract.core.constants import TABLE_PARAMETERS
 from diffract.core.data.repository import DataRepository
 
@@ -27,12 +29,12 @@ class ParameterRepository(DataRepository[ParameterMetadata, ParameterDataProxy])
     TABLE = TABLE_PARAMETERS
 
     # Schema for MetadataIndex
-    METADATA_COLUMNS = {
+    METADATA_COLUMNS: ClassVar[dict[str, type]] = {
         "name": str,
         "model_id": str,
         "ptype": str,
     }
-    METADATA_INDEXES = ["model_id", "ptype", "name"]
+    METADATA_INDEXES: ClassVar[list[str]] = ["model_id", "ptype", "name"]
 
     def create_view(self) -> ParameterView:
         """Create a view over all parameters in this repository.

@@ -125,6 +125,7 @@ ignore = [
 
     # Type-checking import rules (too noisy for this codebase)
     "TC001",  # Move application import into type-checking block
+    "TC002",  # Move third-party import into type-checking block
     "TC003",  # Move standard library import into type-checking block
 
     # Exception message style (prefer readability over ceremony)
@@ -210,6 +211,28 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
     "D",      # Docstring requirements
     "INP001", # Implicit namespace package
     "A001",   # Variable shadows builtin
+]
+# Internal implementation packages: accessing a sibling object's private members
+# is by design within these cohesive subsystems (Session facade <-> its namespaces,
+# data views <-> their repositories/proxies), not a public-boundary concern.
+"src/diffract/session/**" = [
+    "SLF001", # Namespaces are Session's internals and access session/context privates
+]
+"src/diffract/core/data/**" = [
+    "SLF001", # Views/proxies access sibling internals (_proxy_cache, _uids) by design
+    "ARG002", # Interface-conforming method args (e.g. `parallel`) kept for a stable signature
+    "ARG003",
+]
+"src/diffract/viz/plots/**" = [
+    "SLF001", # Cohesive plot internals share private state across base/impl
+    "ARG001", # Base/override hooks keep interface args even when a subclass ignores them
+    "ARG002",
+    "ARG003",
+]
+"src/diffract/session/namespaces/viz/**" = [
+    "ARG001", # viz builders keep API-stable kwargs (x_categoryorder, ...) across plot types
+    "ARG002",
+    "ARG003",
 ]
 
 # Pylint configuration

@@ -17,10 +17,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from concurrent.futures import ProcessPoolExecutor
 
-    from diffract.core.compute.parallel import ParallelContext
     from diffract.core.compute.registry import KernelRegistry
     from diffract.core.data.nn.aggregates import AggregateRepository
     from diffract.core.data.nn.params.interface import IParameterView
+    from diffract.core.parallel import ParallelContext
 
 logger = logging.getLogger(__name__)
 
@@ -250,9 +250,7 @@ class AggregationKernelRunner:
                 aggregate_uids.append(uid)
         return aggregate_uids
 
-    def _execute_batch(
-        self, kernel_name: str, batch: list[PendingGroup]
-    ) -> None:
+    def _execute_batch(self, kernel_name: str, batch: list[PendingGroup]) -> None:
         """Execute aggregation-level kernel on a batch with streaming writes."""
         required_args = self._registry.get_fields_kernel_require(kernel_name)
         tasks: dict[tuple[str, AggregationContext], tuple[Any, ...]] = {}

@@ -273,7 +273,7 @@ else:
                 values = json.loads(payload)
                 if not isinstance(values, list):
                     msg = "Index payload is not a list"
-                    raise TypeError(msg)
+                    raise TypeError(msg)  # noqa: TRY301
                 return {str(v) for v in values}
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -386,7 +386,7 @@ else:
 
         def _write_index_to_store(
             self, table_group: Any, objs: set[str], fields: set[str]
-            ) -> None:
+        ) -> None:
             """Write index sets to persistent store."""
             idx_group = table_group.require_group(ZARR_INDEX_GROUP)
             self._write_index_set(idx_group, ZARR_INDEX_OBJS, objs)
@@ -412,7 +412,7 @@ else:
             skip_field: str | None,
             *,
             use_cache: bool = True,
-            ) -> bool:
+        ) -> bool:
             """Check if object exists in any field."""
             if use_cache:
                 cached_objs = self._get_index_cache(table, ZARR_INDEX_OBJS)
@@ -466,7 +466,7 @@ else:
                 )
                 if field_missing:
                     msg = f"Field '{field_name}' of '{obj_uid}' not found"
-                    raise KeyError(msg)
+                    raise KeyError(msg)  # noqa: TRY301
 
                 arr = table_group[enc_field][enc_uid]
                 kind = arr.attrs.get(STORAGE_ATTR_TYPE)
@@ -481,7 +481,7 @@ else:
                     return pickle.loads(payload)  # noqa: S301
 
                 msg = f"Unknown stored type: {kind}"
-                raise ValueError(msg)
+                raise ValueError(msg)  # noqa: TRY301
             except KeyError:
                 raise
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -574,9 +574,7 @@ else:
             try:
                 if enc_field not in table_group:
                     return []
-                return [
-                    self._decode_component(x) for x in table_group[enc_field].keys()
-                ]
+                return [self._decode_component(x) for x in table_group[enc_field]]
             except Exception as exc:
                 msg = (
                     f"Failed to list objects for field '{field_name}': "
@@ -950,9 +948,9 @@ else:
                 affected = self._erase_field_from_table(table_group, enc_field)
                 if affected:
                     affected_by_table.setdefault(tbl, set()).update(affected)
-                    self._ensure_removal_info(
-                        removed_by_table, tbl
-                    ).removed_fields.add(enc_field)
+                    self._ensure_removal_info(removed_by_table, tbl).removed_fields.add(
+                        enc_field
+                    )
 
         def _clear(self, *, table: str | None = None) -> None:
             if self._readonly:

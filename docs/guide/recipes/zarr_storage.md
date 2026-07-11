@@ -1,16 +1,17 @@
-# Zarr Storage (Cloud-Friendly via fsspec)
+# Zarr storage (fsspec)
 
 Diffract supports Zarr v3 as a storage backend for large arrays, with native support for
 cloud object stores (S3, GCS, Azure, HDFS) via `fsspec`.
 
 ## Installation
 
-```bash
-# Core Zarr support
-uv sync --extra zarr
+The `zarr` extra bundles `s3fs`, so S3-compatible stores (AWS, VK Cloud, MinIO, etc.)
+work without additional packages. GCS and Azure need their fsspec drivers installed
+separately:
 
-# For S3 (AWS, VK Cloud, MinIO, etc.)
-uv pip install s3fs
+```bash
+# Zarr support, including S3
+uv sync --extra zarr
 
 # For Google Cloud Storage
 uv pip install gcsfs
@@ -19,7 +20,7 @@ uv pip install gcsfs
 uv pip install adlfs
 ```
 
-## Storage URL Schemes
+## Storage URL schemes
 
 `ZarrStorageManager` accepts `store_url` using standard fsspec URL schemes:
 
@@ -31,9 +32,9 @@ uv pip install adlfs
 | Azure | `az://container/path` | `adlfs` |
 | HDFS | `hdfs://namenode:8020/path` | `pyarrow` |
 
-## Configuration Options
+## Configuration options
 
-### All Parameters
+### All parameters
 
 ```python
 ZarrStorageManager(
@@ -52,7 +53,11 @@ ZarrStorageManager(
 )
 ```
 
-### INI Configuration
+### INI configuration
+
+The `ini` blocks on this page show only the storage-related sections. A complete session
+config also requires `[metadata]`, `[cache]`, and `[nn.extractor]` sections — see the
+complete minimal example in [Storage and Cache](storage_and_cache.md).
 
 ```ini
 [storage]
@@ -76,7 +81,7 @@ endpoint_url = "${S3_ENDPOINT_URL}"
 region_name = "${AWS_DEFAULT_REGION}"
 ```
 
-## Cloud Provider Examples
+## Cloud provider examples
 
 ### AWS S3
 
@@ -170,18 +175,23 @@ secret = "minioadmin"
 endpoint_url = "http://localhost:9000"
 ```
 
-## Hybrid Storage (Recommended for Production)
+## Hybrid storage (recommended for production)
 
-Combine fast local metadata with cloud array storage:
+Combine fast local metadata with cloud array storage. As elsewhere on this page, the
+block below shows the `[storage]` portion; the remaining required sections are covered in
+[Storage and Cache](storage_and_cache.md).
 
 ```ini
 [storage]
 backend = "hybrid"
 
 [storage.hybrid]
-light = "sqlite"      # Fast local access for metadata
-heavy = "zarr"        # Cloud storage for large arrays
-array_threshold = 134217728  # 128 MB threshold
+# Fast local access for metadata
+light = "sqlite"
+# Cloud storage for large arrays
+heavy = "zarr"
+# 128 MB threshold
+array_threshold = 134217728
 
 [storage.sqlite]
 path = "data/metadata.db"
@@ -202,7 +212,7 @@ secret = "${AWS_SECRET_ACCESS_KEY}"
 - Large arrays stored in cloud (scalable, shareable)
 - Automatic routing based on data size
 
-## Performance Tuning
+## Performance tuning
 
 ### Compression
 
@@ -213,7 +223,7 @@ secret = "${AWS_SECRET_ACCESS_KEY}"
 | `zlib` | ~0.3 GB/s | ~3x | Maximum compatibility |
 | `None` | - | 1x | Already compressed data |
 
-### Chunk Size
+### Chunk size
 
 ```python
 # For cloud storage (S3, GCS, Azure):
@@ -229,13 +239,14 @@ target_chunk_mb = 4.0   # Smaller chunks OK
 - HTTP overhead amortization: larger = fewer requests
 - Memory usage: not too large for streaming
 
-### Lazy Index Sync
+### Lazy index sync
 
 ```ini
-lazy_index_sync = true  # Default: write index only on close()
+[storage.zarr]
+lazy_index_sync = true
 ```
 
-- **true**: Faster (fewer S3 writes), but index lost on crash
+- **true** (default): Faster — the index is written only on `close()` — but lost on crash
 - **false**: Safer (immediate persistence), slower
 
 ## Python API
@@ -273,7 +284,7 @@ with storage:
 storage.close()
 ```
 
-## Session Integration
+## Session integration
 
 ```python
 from diffract import Session
@@ -300,15 +311,15 @@ pytest tests/integration/test_hybrid_zarr_s3.py -v
 make test
 ```
 
-### Environment for S3 Tests
+### Environment for S3 tests
 
 Create `.env` in project root:
 
 ```bash
 AWS_ACCESS_KEY_ID=your_key
 AWS_SECRET_ACCESS_KEY=your_secret
-AWS_DEFAULT_REGION=ru-msk
-S3_ENDPOINT_URL=https://hb.ru-msk.vkcloud-storage.ru
+AWS_DEFAULT_REGION=us-east-1
+S3_ENDPOINT_URL=https://s3.example.com
 S3_BUCKET=your-bucket
 S3_PREFIX=diffract/
 ```

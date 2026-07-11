@@ -11,6 +11,7 @@ handlers for specialized parameter processing and provides comprehensive
 error handling for unsupported model types.
 
 Supported Frameworks:
+    - NumPy: dict[str, numpy.ndarray] mappings (no framework required)
     - PyTorch: torch.nn.Module and state_dict objects
     - Extensible: Easy to add support for additional frameworks
 
@@ -34,6 +35,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+
+import numpy as np
 
 import diffract.core.utils.imports as import_utils
 
@@ -63,17 +66,33 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
         Parameter extractor instance appropriate for the model type.
 
     Raises:
-        ImportError: If no supported frameworks are available.
+        ImportError: If the model is not a NumPy dict and no supported
+            frameworks are available.
         TypeError: If model type is not supported by any available framework.
 
     Example:
         >>> extractor = create_extractor(torch_model)
+        >>> extractor = create_extractor({"encoder.weight": np.random.rand(10, 5)})
         >>> extractor = create_extractor(state_dict, custom_handlers=[handler])
     """
+    if isinstance(model, dict) and all(
+        isinstance(name, str) and isinstance(value, np.ndarray)
+        for name, value in model.items()
+    ):
+        from .numpy import NumpyDictExtractor
+
+        logger.debug(
+            "Creating NumpyDictExtractor for array dict with %d parameters",
+            len(model),
+        )
+
+        return NumpyDictExtractor(*args, model=model, **kwargs)
+
     if not get_supported_frameworks():
         msg = (
             "No supported deep learning frameworks available. "
-            "Please install PyTorch (torch) or other supported frameworks."
+            "Please install PyTorch (torch) or other supported frameworks, "
+            "or pass a dict[str, numpy.ndarray] of weight matrices."
         )
         raise ImportError(msg)
 
@@ -188,7 +207,7 @@ def get_supported_types() -> list[str]:
         >>> types = get_supported_types()
         >>> print(f"Supported types: {', '.join(types)}")
     """
-    types: list[str] = []
+    types: list[str] = ["dict[str, numpy.ndarray] (NumPy weight matrices)"]
     if torch:
         types.extend(
             [

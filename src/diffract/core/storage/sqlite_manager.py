@@ -994,9 +994,7 @@ class SQLiteStorageManager(BaseStorageManager):
             with self._transaction(), closing(self._write_conn.cursor()) as cur:
                 cur.execute("DELETE FROM storage WHERE table_name = ?", (table,))
                 cur.execute("DELETE FROM obj_registry WHERE table_name = ?", (table,))
-                cur.execute(
-                    "DELETE FROM field_registry WHERE table_name = ?", (table,)
-                )
+                cur.execute("DELETE FROM field_registry WHERE table_name = ?", (table,))
 
         self._delete_array_files(rows)
 

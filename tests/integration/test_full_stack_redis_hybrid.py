@@ -7,14 +7,6 @@ import os
 import numpy as np
 import pytest
 
-from diffract.core.compute.execution.enums import (
-    KernelApplyLevel,
-    KernelExecutionProtocol,
-)
-from diffract.core.data.nn.params.metadata import ParameterMetadata
-from diffract.core.data.nn.params.proxy import ParameterDataProxy
-from diffract.core.data.nn.params.schema import ParameterType
-
 pytestmark = [pytest.mark.integration, pytest.mark.network]
 
 REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
@@ -208,46 +200,23 @@ def test_hybrid_erase_operations(redis_cache_manager, hybrid_storage_manager) ->
 
 def test_session_with_redis_hybrid(session_with_redis_hybrid) -> None:
     """Test full Session workflow with Redis cache and Hybrid storage."""
+    torch = pytest.importorskip("torch")
     session = session_with_redis_hybrid
 
-    # Register kernel
-    registry = session._container.compute_singleton.kernel_registry()  # noqa: SLF001
-
+    @session.compute.kernel(require_fields=("weights",), produce_fields=("w_sum",))
     def w_sum(w: np.ndarray) -> float:
         return float(np.sum(w))
 
-    _, cfg_dict = registry._split_signature(w_sum)  # noqa: SLF001
-    registry.register_kernel(
-        name="w_sum",
-        require_fields=("weights",),
-        produce_fields=("w_sum",),
-        implementation=w_sum,
-        apply_level=KernelApplyLevel.PARAMETER,
-        execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
-        restrictions=None,
-        config=cfg_dict,
-    )
-
-    # Pre-populate parameter
-    repo = session._parameter_repository  # noqa: SLF001
-
-    meta = ParameterMetadata(
-        uid="hybrid_test",
-        name="test.weight",
-        ptype=ParameterType.DENSE,
-        model_id="m1",
-    )
     weights = np.random.randn(100, 100).astype(np.float32)
-    proxy = ParameterDataProxy.create_and_store(
-        meta=meta, repository=repo
-    )
-    proxy.set_field("weights", weights)
 
-    # Compute
-    session.compute("w_sum")
+    with session:
+        session.models.add(
+            {"test.weight": torch.from_numpy(weights)}, model_id="m1"
+        )
+        session.compute.apply("w_sum")
+        result = session.results.export_metrics("w_sum", export_format="dict")
 
-    # Get results
-    result = session.get_results("w_sum", export_format="dict")
-    assert meta.uid in result.scalars
-    assert result.scalars[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
+    assert len(result) == 1
+    ((_, entry),) = result.items()
+    assert entry["fields"]["w_sum"] == float(np.sum(weights))
 

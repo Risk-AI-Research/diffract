@@ -1,0 +1,19 @@
+# @package refs
+
+
+attn_ptype:
+    _target_: diffract.viz.data.FieldRef
+    field: param
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: custom
+      custom_order:
+      - 'q_proj_head'
+      - 'k_proj_head'
+      - 'v_proj_head'
+      - 'o_proj_head'
+      - 'fc1'
+      - 'gate'
+      - 'fc2'

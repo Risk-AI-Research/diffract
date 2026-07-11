@@ -71,8 +71,8 @@ Add one or more models:
 
 ```python
 with session:
-    session.add(model_small, model_id="toy_small", parameter_overrides=build_overrides(model_small))
-    session.add(model_big, model_id="toy_big", parameter_overrides=build_overrides(model_big))
+    session.models.add(model_small, model_id="toy_small", parameter_overrides=build_overrides(model_small))
+    session.models.add(model_big, model_id="toy_big", parameter_overrides=build_overrides(model_big))
 ```
 
 ## 2) Compute fields
@@ -81,7 +81,7 @@ Compute a few scalar fields that plots can consume:
 
 ```python
 with session:
-    session.compute("shape", "frob_norm", "effective_rank", "stable_rank")
+    session.compute.apply("frob_norm", "effective_rank", "stable_rank")
 ```
 
 ## 3) Plot from Python objects
@@ -89,32 +89,57 @@ with session:
 ### Box plot (grouped by model)
 
 ```python
-from diffract.viz.plots.scalar import BoxPlot
+from diffract.viz.data import FieldRef
+from diffract.viz.plots.boxplot import BoxPlot
 
 with session:
-    fig = session.draw(
+    fig = session.viz.draw(
         plot=BoxPlot(
-            field="stable_rank",
+            y=FieldRef("stable_rank"),
             title="stable_rank by model_id",
-            group_by="model_id",
+            x=FieldRef("model_id"),
         )
     )
+    fig.show()
+```
+
+You can also use the ergonomic `session.viz.box(...)` wrapper, which accepts
+plain field-name strings:
+
+```python
+with session:
+    fig = session.viz.box(y="stable_rank", x="model_id", title="stable_rank by model_id")
     fig.show()
 ```
 
 ### Scatter plot (two scalar fields)
 
 ```python
+from diffract.viz.data import FieldRef
 from diffract.viz.plots.scatter import ScatterPlot
 
 with session:
-    fig = session.draw(
+    fig = session.viz.draw(
         plot=ScatterPlot(
-            x_field="frob_norm",
-            y_field="stable_rank",
+            x=FieldRef("frob_norm"),
+            y=FieldRef("stable_rank"),
             title="stable_rank vs frob_norm",
-            group_by="model_id",
+            group_by=FieldRef("model_id"),
         )
+    )
+    fig.show()
+```
+
+Or with the ergonomic `session.viz.scatter(...)` wrapper (plain field-name
+strings):
+
+```python
+with session:
+    fig = session.viz.scatter(
+        x="frob_norm",
+        y="stable_rank",
+        title="stable_rank vs frob_norm",
+        group_by="model_id",
     )
     fig.show()
 ```
@@ -122,7 +147,7 @@ with session:
 ## 4) Plot from YAML configs (Hydra-style)
 
 For reproducible and shareable plots, you can keep plot definitions in YAML and
-render them via `Session.draw(config_path=...)`.
+render them via `Session.viz.draw(config_path=...)`.
 
 All YAML configs used in the notebook live in `examples/configs/`. For example:
 
@@ -132,7 +157,7 @@ from pathlib import Path
 CONFIGS_DIR = Path("examples/configs")
 
 with session:
-    fig = session.draw(
+    fig = session.viz.draw(
         config_path=CONFIGS_DIR / "boxplot_stable_rank.yaml",
         overrides=[],  # optional Hydra overrides
     )
@@ -145,32 +170,53 @@ See [Plot configs](plot_configs.md) for the YAML structure and available plot ty
 
 If you attach metadata via `other_meta` (like `layer_id`), you can color by it:
 
+The theme is passed to `session.viz.draw(..., theme=...)`, not to the plot
+object. Coloring by metadata is controlled with `marker_color`.
+
 ```python
-from diffract.viz.plots.scalar import BoxPlot
-from diffract.viz.themes import DARK_THEME, MINIMAL_THEME
+from diffract.viz import DARK_THEME, MINIMAL_THEME
+from diffract.viz.data import FieldRef
+from diffract.viz.plots.boxplot import BoxPlot
 
 with session:
-    fig = session.draw(
+    fig = session.viz.draw(
         plot=BoxPlot(
-            field="stable_rank",
+            y=FieldRef("stable_rank"),
             title="Stable Rank by Model (Dark theme, color by layer_id)",
-            group_by="model_id",
-            color_by="layer_id",
-            theme=DARK_THEME,
-        )
+            x=FieldRef("model_id"),
+            marker_color=FieldRef("layer_id"),
+        ),
+        theme=DARK_THEME,
     )
     fig.show()
 
 with session:
-    fig2 = session.draw(
+    fig2 = session.viz.draw(
         plot=BoxPlot(
-            field="stable_rank",
+            y=FieldRef("stable_rank"),
             title="Stable Rank (Minimal theme)",
-            group_by="model_id",
-            theme=MINIMAL_THEME,
-        )
+            x=FieldRef("model_id"),
+        ),
+        theme=MINIMAL_THEME,
     )
     fig2.show()
+```
+
+The same is expressible with the ergonomic `session.viz.box(...)` wrapper, which
+accepts plain field-name strings and a `theme=` argument:
+
+```python
+from diffract.viz import DARK_THEME
+
+with session:
+    fig = session.viz.box(
+        y="stable_rank",
+        x="model_id",
+        marker_color="layer_id",
+        title="Stable Rank by Model (Dark theme, color by layer_id)",
+        theme=DARK_THEME,
+    )
+    fig.show()
 ```
 
 You can also load a theme from YAML (see `examples/configs/theme_example.yaml` in the repo):
@@ -179,8 +225,8 @@ You can also load a theme from YAML (see `examples/configs/theme_example.yaml` i
 from pathlib import Path
 
 with session:
-    fig = session.draw(
-        config_path=Path("examples/configs/boxplot_greater_dim.yaml"),
+    fig = session.viz.draw(
+        config_path=Path("examples/configs/boxplot_stable_rank.yaml"),
         theme_path=Path("examples/configs/theme_example.yaml"),
     )
     fig.show()
@@ -190,8 +236,7 @@ with session:
 
 ```python
 with session:
-    df = session.get_results(
-        "shape",
+    df = session.results.export_metrics(
         "frob_norm",
         "effective_rank",
         "stable_rank",

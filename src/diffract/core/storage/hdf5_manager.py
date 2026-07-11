@@ -388,9 +388,7 @@ else:
                 return
             index_dataset = self._index_dataset(f, table)
             if index_dataset is not None:
-                vals = [
-                    self._decode_index_value(raw) for raw in index_dataset[:]
-                ]
+                vals = [self._decode_index_value(raw) for raw in index_dataset[:]]
                 cache.update(x for x in vals if x and x != self._index_tombstone)
 
         def _index_add_obj(self, f: h5py.File, table: str, uid: UID) -> None:
@@ -408,9 +406,7 @@ else:
                 cache.add(uid)
             else:
                 # Use set for O(1) lookup instead of O(n) any() iteration
-                existing = {
-                    self._decode_index_value(raw) for raw in index_dataset[:]
-                }
+                existing = {self._decode_index_value(raw) for raw in index_dataset[:]}
                 if uid in existing:
                     return
 
@@ -420,7 +416,7 @@ else:
 
         def _index_remove_obj(self, f: h5py.File, table: str, uid: UID) -> None:
             """Mark `uid` as removed in the index dataset (tombstone).
-            
+
             If the index dataset doesn't exist, this is a no-op (object was never
             stored in this backend, common in hybrid storage scenarios).
             """
@@ -555,9 +551,7 @@ else:
                 out: list[str] = []
 
                 if obj_uid is None:
-                    return [
-                        fld for fld in table_group if fld != self._index_group
-                    ]
+                    return [fld for fld in table_group if fld != self._index_group]
                 for field in table_group:
                     if field == self._index_group:
                         continue

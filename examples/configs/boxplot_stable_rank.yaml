@@ -1,10 +1,10 @@
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
-    _target_: diffract.viz.plots.scalar.BoxPlot
-    field: stable_rank
+    _target_: diffract.viz.plots.boxplot.BoxPlot
+    y: stable_rank
     title: "stable_rank by model_id"
-    group_by: model_id
+    x: model_id
 
 config:
   layout:

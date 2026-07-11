@@ -102,10 +102,9 @@ def test_session_compute_and_get_results_roundtrip(temp_dir: Path) -> None:
     )
 
     session = Session(container=container)
-    session.compute("w_sum")
+    session.compute.apply("w_sum")
 
-    result = session.get_results("w_sum", export_format="dict")
-    scalars = result.scalars
+    scalars = session.results.export_metrics("w_sum", export_format="dict")
     assert meta.uid in scalars
     assert scalars[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
 
@@ -116,7 +115,7 @@ def test_session_compute_raises_on_unknown_kernel(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(KernelNotFoundError, match="Cannot produce"):
-        session.compute("does_not_exist")
+        session.compute.apply("does_not_exist")
 
 
 def test_session_patch_meta_strict_conflict_raises(temp_dir: Path) -> None:
@@ -142,7 +141,7 @@ def test_session_patch_meta_strict_conflict_raises(temp_dir: Path) -> None:
 
     session = Session(container=container)
     with pytest.raises(SessionError, match="Metadata conflicts"):
-        session.patch_meta(updates={"p_meta": {"k": 2}}, force=False)
+        session.models.parameters.patch_meta(updates={"p_meta": {"k": 2}}, force=False)
 
 
 def test_session_patch_meta_force_overwrites_and_persists(temp_dir: Path) -> None:
@@ -167,11 +166,17 @@ def test_session_patch_meta_force_overwrites_and_persists(temp_dir: Path) -> Non
     )
 
     session = Session(container=container)
-    session.patch_meta(updates={"p_meta2": {"k": 2, "new_key": "v"}}, force=True)
+    session.models.parameters.patch_meta(
+        updates={"p_meta2": {"k": 2, "new_key": "v"}}, force=True
+    )
 
     # New Session should load updated metadata from storage.
     session2 = Session(container=container)
-    info = session2.list_parameters(parameter_uids=["p_meta2"], verbose=True)
+    info = [
+        param
+        for param in session2.models.parameters.list(verbose=True)
+        if param["uid"] == "p_meta2"
+    ]
     assert info[0]["other_meta"]["k"] == 2
     assert info[0]["other_meta"]["new_key"] == "v"
 
@@ -185,7 +190,9 @@ def test_session_ingest_fields_strict_conflict_raises(temp_dir: Path) -> None:
     repository = container.nn.parameter_repository()
     cache = container.cache.cache_manager()
 
-    meta = ParameterMetadata(uid="p_fields", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p_fields", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     ParameterDataProxy.create_and_store(
         meta=meta,
         repository=repository,
@@ -194,7 +201,7 @@ def test_session_ingest_fields_strict_conflict_raises(temp_dir: Path) -> None:
 
     session = Session(container=container)
     with pytest.raises(SessionError, match="Field conflicts"):
-        session.ingest_fields({meta.uid: {"a": 2}}, force=False)
+        session.results.ingest_metrics({meta.uid: {"a": 2}}, force=False)
 
 
 def test_session_ingest_fields_force_overwrites(temp_dir: Path) -> None:
@@ -206,7 +213,9 @@ def test_session_ingest_fields_force_overwrites(temp_dir: Path) -> None:
     repository = container.nn.parameter_repository()
     cache = container.cache.cache_manager()
 
-    meta = ParameterMetadata(uid="p_fields2", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p_fields2", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     ParameterDataProxy.create_and_store(
         meta=meta,
         repository=repository,
@@ -214,7 +223,7 @@ def test_session_ingest_fields_force_overwrites(temp_dir: Path) -> None:
     storage.set_field(meta.uid, "a", 1, table=TABLE_PARAMETERS)
 
     session = Session(container=container)
-    session.ingest_fields({meta.uid: {"a": 2}}, force=True)
+    session.results.ingest_metrics({meta.uid: {"a": 2}}, force=True)
     assert storage.get_field(meta.uid, "a", table=TABLE_PARAMETERS) == 2
 
 
@@ -227,13 +236,15 @@ def test_session_ingest_fields_simple_field(temp_dir: Path) -> None:
     storage = container.storage.storage_manager()
     repository = container.nn.parameter_repository()
 
-    meta = ParameterMetadata(uid="p_ctx", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p_ctx", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     ParameterDataProxy.create_and_store(meta=meta, repository=repository)
 
     session = Session(container=container)
-    session.ingest_fields({meta.uid: {"metric": 123}}, force=False)
-    result = session.get_results("metric", export_format="dict")
-    assert result.scalars[meta.uid]["fields"]["metric"] == 123
+    session.results.ingest_metrics({meta.uid: {"metric": 123}}, force=False)
+    result = session.results.export_metrics("metric", export_format="dict")
+    assert result[meta.uid]["fields"]["metric"] == 123
 
 
 def test_session_draw_validates_inputs(temp_dir: Path) -> None:
@@ -242,9 +253,13 @@ def test_session_draw_validates_inputs(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(ValueError, match="exactly one"):
-        session.draw()
+        session.viz.draw()
 
 
+@pytest.mark.skipif(
+    not import_utils.is_available("torch"),
+    reason="torch required for add/erase model test",
+)
 def test_session_add_and_erase_model_id(temp_dir: Path) -> None:
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
@@ -256,14 +271,55 @@ def test_session_add_and_erase_model_id(temp_dir: Path) -> None:
 
     model = nn.Sequential(nn.Linear(3, 2, bias=False), nn.ReLU(), nn.Linear(2, 2))
 
-    session.add(model, model_id="m_add")
-    assert session.list_models() == ["m_add"]
+    session.models.add(model, model_id="m_add")
+    assert session.models.list() == ["m_add"]
 
     with pytest.raises(SessionError, match="already exists"):
-        session.add(model, model_id="m_add")
+        session.models.add(model, model_id="m_add")
 
-    session.erase_models("m_add")
-    assert session.list_models() == []
+    session.models.erase("m_add")
+    assert session.models.list() == []
+
+
+def test_session_add_rejects_model_with_no_extractable_parameters(
+    temp_dir: Path,
+) -> None:
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+
+    session = Session(container=create_main_container(cfg))
+
+    biases_only = {"layer.bias": np.zeros(4)}
+    with pytest.raises(SessionError, match="produced no parameters"):
+        session.models.add(biases_only, model_id="bias_model")
+
+    with pytest.raises(SessionError, match="produced no parameters"):
+        session.models.add({}, model_id="empty_model")
+
+    assert session.models.list() == []
+
+
+def test_session_add_numpy_dict_end_to_end(temp_dir: Path) -> None:
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+
+    session = Session(container=create_main_container(cfg))
+
+    rng = np.random.default_rng(0)
+    weights = {
+        "encoder.weight": rng.random((16, 8)),
+        "decoder.weight": rng.random((8, 16)),
+    }
+
+    session.models.add(weights, model_id="np_model")
+    assert session.models.list() == ["np_model"]
+
+    session.compute.apply("frob_norm")
+    results = session.results.export_metrics("frob_norm", export_format="dict")
+
+    assert len(results) == 2
+    for entry in results.values():
+        assert entry["fields"]["frob_norm"] > 0
 
 
 def test_session_erase_results_can_remove_dependents(temp_dir: Path) -> None:
@@ -275,7 +331,9 @@ def test_session_erase_results_can_remove_dependents(temp_dir: Path) -> None:
     repository = container.nn.parameter_repository()
     cache = container.cache.cache_manager()
 
-    meta = ParameterMetadata(uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repository)
     proxy.set_field(WEIGHTS_FIELD, np.ones((2, 2), dtype=np.float32))
 
@@ -312,11 +370,11 @@ def test_session_erase_results_can_remove_dependents(temp_dir: Path) -> None:
     )
 
     session = Session(container=container)
-    session.compute("b")
+    session.compute.apply("b")
     assert storage.has_field(meta.uid, "a", table=TABLE_PARAMETERS)
     assert storage.has_field(meta.uid, "b", table=TABLE_PARAMETERS)
 
-    session.erase_results("a", erase_dependent_also=True)
+    session.results.erase("a", erase_dependent_also=True)
     assert not storage.has_field(meta.uid, "a", table=TABLE_PARAMETERS)
     assert not storage.has_field(meta.uid, "b", table=TABLE_PARAMETERS)
 
@@ -338,7 +396,9 @@ def test_session_merge_migrates_fields_and_handles_conflicts(temp_dir: Path) -> 
     repository_b = container_b.nn.parameter_repository()
 
     # Session A starts empty. Session B has two parameters with computed fields.
-    meta_b1 = ParameterMetadata(uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta_b1 = ParameterMetadata(
+        uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p_b1 = ParameterDataProxy.create_and_store(
         meta=meta_b1,
         repository=repository_b,
@@ -346,7 +406,9 @@ def test_session_merge_migrates_fields_and_handles_conflicts(temp_dir: Path) -> 
     p_b1.set_field("foo", 999)
     p_b1.set_field("bar", 3)
 
-    meta_b2 = ParameterMetadata(uid="b2", name="w2", ptype=ParameterType.DENSE, model_id="m2")
+    meta_b2 = ParameterMetadata(
+        uid="b2", name="w2", ptype=ParameterType.DENSE, model_id="m2"
+    )
     p_b2 = ParameterDataProxy.create_and_store(
         meta=meta_b2,
         repository=repository_b,
@@ -360,17 +422,15 @@ def test_session_merge_migrates_fields_and_handles_conflicts(temp_dir: Path) -> 
     session_b = Session(container=container_b)
 
     WiringConfiguration.wire(container_a)
-    session_a.merge(session_b, verify=True)
+    session_a.utils.merge_other_session(session_b, verify=True)
 
     # New parameters created and their computed fields migrated.
-    assert set(session_a.list_models()) == {"m1", "m2"}
-    result_bar = session_a.get_results("bar", export_format="dict")
-    got_bar = result_bar.scalars
+    assert set(session_a.models.list()) == {"m1", "m2"}
+    got_bar = session_a.results.export_metrics("bar", export_format="dict")
     assert meta_b1.uid in got_bar
     assert got_bar[meta_b1.uid]["fields"]["bar"] == 3
 
-    result_z = session_a.get_results("z", export_format="dict")
-    got = result_z.scalars
+    got = session_a.results.export_metrics("z", export_format="dict")
     assert meta_b2.uid in got
     assert got[meta_b2.uid]["fields"]["z"] == 7
 
@@ -393,7 +453,9 @@ def test_session_merge_respects_field_allowlist_and_chunks(temp_dir: Path) -> No
     repository_b = container_b.nn.parameter_repository()
 
     # Two params with multiple fields to ensure we hit chunking and allowlist.
-    meta_b1 = ParameterMetadata(uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta_b1 = ParameterMetadata(
+        uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p_b1 = ParameterDataProxy.create_and_store(
         meta=meta_b1,
         repository=repository_b,
@@ -401,7 +463,9 @@ def test_session_merge_respects_field_allowlist_and_chunks(temp_dir: Path) -> No
     p_b1.set_field("foo", 1)
     p_b1.set_field("bar", 2)
 
-    meta_b2 = ParameterMetadata(uid="b2", name="w2", ptype=ParameterType.DENSE, model_id="m2")
+    meta_b2 = ParameterMetadata(
+        uid="b2", name="w2", ptype=ParameterType.DENSE, model_id="m2"
+    )
     p_b2 = ParameterDataProxy.create_and_store(
         meta=meta_b2,
         repository=repository_b,
@@ -417,10 +481,11 @@ def test_session_merge_respects_field_allowlist_and_chunks(temp_dir: Path) -> No
 
     # Force very small budget to ensure multiple chunks.
     WiringConfiguration.wire(container_a)
-    session_a.merge(session_b, fields=["foo"], verify=True, read_budget_bytes=1)
+    session_a.utils.merge_other_session(
+        session_b, fields=["foo"], verify=True, read_budget_bytes=1
+    )
 
-    result_foo = session_a.get_results("foo", export_format="dict")
-    got_foo = result_foo.scalars
+    got_foo = session_a.results.export_metrics("foo", export_format="dict")
     assert got_foo[meta_b1.uid]["fields"]["foo"] == 1
     assert got_foo[meta_b2.uid]["fields"]["foo"] == 3
 
@@ -452,7 +517,9 @@ def test_session_merge_does_not_overwrite_existing_fields_when_verify_true(
     repository_b = container_b.nn.parameter_repository()
 
     # A already has (model_id, name) with field 'bar'.
-    meta_a = ParameterMetadata(uid="a1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta_a = ParameterMetadata(
+        uid="a1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p_a = ParameterDataProxy.create_and_store(
         meta=meta_a,
         repository=repository_a,
@@ -460,7 +527,9 @@ def test_session_merge_does_not_overwrite_existing_fields_when_verify_true(
     p_a.set_field("bar", 111)
 
     # B has same (model_id, name) but different uid and a different value for 'bar'.
-    meta_b = ParameterMetadata(uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta_b = ParameterMetadata(
+        uid="b1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p_b = ParameterDataProxy.create_and_store(
         meta=meta_b,
         repository=repository_b,
@@ -474,14 +543,16 @@ def test_session_merge_does_not_overwrite_existing_fields_when_verify_true(
     session_a = Session(container=container_a)
     WiringConfiguration.wire(container_b)
     session_b = Session(container=container_b)
-    assert session_b._parameter_repository.storage_manager.has_field(  # noqa: SLF001
+    assert repository_b.storage_manager.has_field(
         meta_b.uid, "foo", table=TABLE_PARAMETERS
     )
-    fields_b = session_b._get_view().list_fields_by_uid()[meta_b.uid]  # noqa: SLF001
+    with repository_b:
+        view_b = repository_b.create_view()
+        fields_b = view_b.list_fields_by_uid()[meta_b.uid]
     assert "foo" in fields_b
 
     WiringConfiguration.wire(container_a)
-    session_a.merge(session_b, verify=True)
+    session_a.utils.merge_other_session(session_b, verify=True)
 
     # Existing field should remain unchanged; new field should be migrated.
     # Also ensure we did not create a new parameter with the source uid.
@@ -508,7 +579,9 @@ def test_patch_meta_invalid_structure_raises(temp_dir: Path) -> None:
 
     session = Session(container=container)
     with pytest.raises(SessionError, match="expected dict"):
-        session.patch_meta(updates={"p_invalid": "not_a_dict"}, force=False)
+        session.models.parameters.patch_meta(
+            updates={"p_invalid": "not_a_dict"}, force=False
+        )
 
 
 def test_erase_models_neither_args_nor_flag_raises(temp_dir: Path) -> None:
@@ -518,7 +591,7 @@ def test_erase_models_neither_args_nor_flag_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(ValueError, match="No model_ids provided"):
-        session.erase_models()
+        session.models.erase()
 
 
 def test_erase_models_both_args_and_flag_raises(temp_dir: Path) -> None:
@@ -528,7 +601,7 @@ def test_erase_models_both_args_and_flag_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(ValueError, match="Cannot specify both"):
-        session.erase_models("model1", erase_all=True)
+        session.models.erase("model1", erase_all=True)
 
 
 def test_erase_results_neither_args_nor_flag_raises(temp_dir: Path) -> None:
@@ -538,7 +611,7 @@ def test_erase_results_neither_args_nor_flag_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(ValueError, match="No fields_to_erase provided"):
-        session.erase_results()
+        session.results.erase()
 
 
 def test_erase_results_both_args_and_flag_raises(temp_dir: Path) -> None:
@@ -548,7 +621,7 @@ def test_erase_results_both_args_and_flag_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(ValueError, match="Cannot specify both"):
-        session.erase_results("field1", erase_all=True)
+        session.results.erase("field1", erase_all=True)
 
 
 def test_patch_meta_unknown_uid_raises(temp_dir: Path) -> None:
@@ -558,7 +631,9 @@ def test_patch_meta_unknown_uid_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(SessionError, match="Unknown parameter UIDs"):
-        session.patch_meta(updates={"nonexistent_uid": {"key": "value"}}, force=False)
+        session.models.parameters.patch_meta(
+            updates={"nonexistent_uid": {"key": "value"}}, force=False
+        )
 
 
 def test_ingest_fields_unknown_uid_raises(temp_dir: Path) -> None:
@@ -568,29 +643,27 @@ def test_ingest_fields_unknown_uid_raises(temp_dir: Path) -> None:
     session = Session(container=create_main_container(cfg))
 
     with pytest.raises(SessionError, match="Unknown parameter UIDs"):
-        session.ingest_fields({"nonexistent_uid": {"field": 1}}, force=False)
+        session.results.ingest_metrics({"nonexistent_uid": {"field": 1}}, force=False)
 
 
 def test_session_get_results_returns_structured_export(temp_dir: Path) -> None:
-    """Test that get_results returns StructuredExportResult with scalars and aggregates."""
+    """Test that export_metrics returns scalars dict."""
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
 
     container = create_main_container(cfg)
     repository = container.nn.parameter_repository()
 
-    meta = ParameterMetadata(uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p = ParameterDataProxy.create_and_store(meta=meta, repository=repository)
     p.set_field("scalar_field", 42)
 
     session = Session(container=container)
-    result = session.get_results("scalar_field", export_format="dict")
+    result = session.results.export_metrics("scalar_field", export_format="dict")
 
-    # Should have scalars dict and empty aggregates list
-    assert hasattr(result, "scalars")
-    assert hasattr(result, "aggregates")
-    assert result.scalars[meta.uid]["fields"]["scalar_field"] == 42
-    assert result.aggregates == []
+    assert result[meta.uid]["fields"]["scalar_field"] == 42
 
 
 def test_session_erase_results_removes_scalar_field(temp_dir: Path) -> None:
@@ -603,7 +676,9 @@ def test_session_erase_results_removes_scalar_field(temp_dir: Path) -> None:
     repository = container.nn.parameter_repository()
 
     # Create a parameter with weights
-    meta = ParameterMetadata(uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta = ParameterMetadata(
+        uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     p = ParameterDataProxy.create_and_store(meta=meta, repository=repository)
     p.set_field(WEIGHTS_FIELD, np.ones((2, 2), dtype=np.float32))
 
@@ -627,23 +702,22 @@ def test_session_erase_results_removes_scalar_field(temp_dir: Path) -> None:
 
     session = Session(container=container)
 
-    # Compute the metric
-    session.compute("metric")
+    session.compute.apply("metric")
     assert storage.has_field(meta.uid, "metric", table=TABLE_PARAMETERS)
 
-    # Erase 'metric'
-    session.erase_results("metric")
+    session.results.erase("metric")
 
     assert not storage.has_field(meta.uid, "metric", table=TABLE_PARAMETERS)
 
 
 def test_session_list_aggregates_returns_empty_initially(temp_dir: Path) -> None:
-    """Test that list_aggregates returns empty list when no aggregates exist."""
+    """Test that export_aggregates for a non-ingested field returns empty."""
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
 
     session = Session(container=create_main_container(cfg))
-    aggregates = session.list_aggregates()
+    # New API: no list_aggregates(); use export_aggregates with a field (empty before ingest)
+    aggregates = session.results.export_aggregates("l_overlap", export_format="list")
     assert aggregates == []
 
 
@@ -654,19 +728,20 @@ def test_session_ingest_aggregates_creates_aggregates(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
-    # Ingest an aggregate
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "context_params": ("layer.weight",),
-            "value": np.eye(3),
-        }
-    ])
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m1", "m2"),
+                "context_params": ("layer.weight",),
+                "value": np.eye(3),
+            }
+        ]
+    )
 
-    aggregates = session.list_aggregates()
+    aggregates = session.results.export_aggregates("l_overlap", export_format="list")
     assert len(aggregates) == 1
-    assert aggregates[0]["field_name"] == "l_overlap"
+    assert aggregates[0]["field"] == "l_overlap"
     assert aggregates[0]["context_models"] == ("m1", "m2")
     assert aggregates[0]["context_params"] == ("layer.weight",)
 
@@ -678,24 +753,27 @@ def test_session_ingest_aggregates_conflict_raises(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
-    # Ingest initial aggregate
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": np.eye(3),
-        }
-    ])
-
-    # Try to ingest same aggregate again
-    with pytest.raises(SessionError, match="conflicts"):
-        session.ingest_aggregates([
+    session.results.ingest_aggregates(
+        [
             {
                 "field_name": "l_overlap",
                 "context_models": ("m1", "m2"),
-                "value": np.eye(4),
+                "value": np.eye(3),
             }
-        ], force=False)
+        ]
+    )
+
+    with pytest.raises(SessionError, match="conflicts"):
+        session.results.ingest_aggregates(
+            [
+                {
+                    "field_name": "l_overlap",
+                    "context_models": ("m1", "m2"),
+                    "value": np.eye(4),
+                }
+            ],
+            force=False,
+        )
 
 
 def test_session_ingest_aggregates_force_overwrites(temp_dir: Path) -> None:
@@ -705,26 +783,29 @@ def test_session_ingest_aggregates_force_overwrites(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
-    # Ingest initial aggregate
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": np.eye(3),
-        }
-    ])
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m1", "m2"),
+                "value": np.eye(3),
+            }
+        ]
+    )
 
-    # Overwrite with force=True
     new_value = np.ones((4, 4))
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": new_value,
-        }
-    ], force=True)
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m1", "m2"),
+                "value": new_value,
+            }
+        ],
+        force=True,
+    )
 
-    aggregates = session.list_aggregates(verbose=True)
+    aggregates = session.results.export_aggregates("l_overlap", export_format="list")
     assert len(aggregates) == 1
     assert np.array_equal(aggregates[0]["value"], new_value)
 
@@ -737,11 +818,13 @@ def test_session_erase_results_removes_aggregates(temp_dir: Path) -> None:
     container = create_main_container(cfg)
     registry = container.compute_singleton.kernel_registry()
 
-    # Register a dummy kernel that "produces" l_overlap so it can be erased
+    # Register a dummy kernel producing the field so it can be erased; the
+    # registry is a process-wide singleton, so the name must not shadow a
+    # real kernel (a fake "l_overlap" used to poison every later test).
     registry.register_kernel(
-        name="l_overlap",
+        name="dummy_overlap",
         require_fields=(),
-        produce_fields=("l_overlap",),
+        produce_fields=("dummy_overlap",),
         implementation=lambda: None,
         apply_level=KernelApplyLevel.PARAMETER,
         execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
@@ -751,29 +834,34 @@ def test_session_erase_results_removes_aggregates(temp_dir: Path) -> None:
 
     session = Session(container=container)
 
-    # Ingest aggregates
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": np.eye(3),
-        },
-        {
-            "field_name": "other_field",
-            "context_models": ("m1", "m3"),
-            "value": np.ones((2, 2)),
-        },
-    ])
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "dummy_overlap",
+                "context_models": ("m1", "m2"),
+                "value": np.eye(3),
+            },
+            {
+                "field_name": "other_field",
+                "context_models": ("m1", "m3"),
+                "value": np.ones((2, 2)),
+            },
+        ]
+    )
 
-    assert len(session.list_aggregates()) == 2
+    assert (
+        len(session.results.export_aggregates("dummy_overlap", export_format="list"))
+        == 1
+    )
+    assert (
+        len(session.results.export_aggregates("other_field", export_format="list")) == 1
+    )
 
-    # Erase l_overlap
-    session.erase_results("l_overlap")
+    session.results.erase("dummy_overlap")
 
-    # Only other_field should remain
-    aggregates = session.list_aggregates()
+    aggregates = session.results.export_aggregates("other_field", export_format="list")
     assert len(aggregates) == 1
-    assert aggregates[0]["field_name"] == "other_field"
+    assert aggregates[0]["field"] == "other_field"
 
 
 def test_session_erase_models_removes_aggregates(temp_dir: Path) -> None:
@@ -785,37 +873,45 @@ def test_session_erase_models_removes_aggregates(temp_dir: Path) -> None:
     repository = container.nn.parameter_repository()
 
     # Create parameters for m1 and m2
-    meta_m1 = ParameterMetadata(uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1")
+    meta_m1 = ParameterMetadata(
+        uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1"
+    )
     ParameterDataProxy.create_and_store(meta=meta_m1, repository=repository)
 
-    meta_m2 = ParameterMetadata(uid="p2", name="w", ptype=ParameterType.DENSE, model_id="m2")
+    meta_m2 = ParameterMetadata(
+        uid="p2", name="w", ptype=ParameterType.DENSE, model_id="m2"
+    )
     ParameterDataProxy.create_and_store(meta=meta_m2, repository=repository)
 
     session = Session(container=container)
 
-    # Ingest aggregates involving m1
-    session.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": np.eye(3),
-        },
-        {
-            "field_name": "r_overlap",
-            "context_models": ("m2", "m3"),
-            "value": np.ones((2, 2)),
-        },
-    ])
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m1", "m2"),
+                "value": np.eye(3),
+            },
+            {
+                "field_name": "r_overlap",
+                "context_models": ("m2", "m3"),
+                "value": np.ones((2, 2)),
+            },
+        ]
+    )
 
-    assert len(session.list_aggregates()) == 2
+    assert (
+        len(session.results.export_aggregates("l_overlap", export_format="list")) == 1
+    )
+    assert (
+        len(session.results.export_aggregates("r_overlap", export_format="list")) == 1
+    )
 
-    # Erase model m1
-    session.erase_models("m1")
+    session.models.erase("m1")
 
-    # Only r_overlap (m2, m3) should remain - l_overlap (m1, m2) should be gone
-    aggregates = session.list_aggregates()
+    aggregates = session.results.export_aggregates("r_overlap", export_format="list")
     assert len(aggregates) == 1
-    assert aggregates[0]["field_name"] == "r_overlap"
+    assert aggregates[0]["field"] == "r_overlap"
 
 
 def test_session_merge_copies_aggregates(temp_dir: Path) -> None:
@@ -830,70 +926,68 @@ def test_session_merge_copies_aggregates(temp_dir: Path) -> None:
     container_a = create_main_container(cfg_a)
     container_b = create_main_container(cfg_b)
 
-    # Session B has aggregates
     WiringConfiguration.wire(container_b)
     session_b = Session(container=container_b)
-    session_b.ingest_aggregates([
-        {
-            "field_name": "l_overlap",
-            "context_models": ("m1", "m2"),
-            "value": np.eye(3),
-        }
-    ])
-    assert len(session_b.list_aggregates()) == 1
+    session_b.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m1", "m2"),
+                "value": np.eye(3),
+            }
+        ]
+    )
+    assert (
+        len(session_b.results.export_aggregates("l_overlap", export_format="list")) == 1
+    )
 
-    # Check that aggregate_repository has the aggregate before wiring change
-    agg_repo_b = session_b._aggregate_repository
-    assert len(agg_repo_b) == 1
-
-    # Session A is empty
     WiringConfiguration.wire(container_a)
     session_a = Session(container=container_a)
-    assert len(session_a.list_aggregates()) == 0
+    assert session_a.results.export_aggregates("l_overlap", export_format="list") == []
 
-    # Check session_b's aggregate_repository after wiring change
-    # It should still have the aggregate since it's the same object
-    assert len(session_b._aggregate_repository) == 1
-    assert session_b._aggregate_repository is agg_repo_b
+    session_a.utils.merge_other_session(session_b, verify=False)
 
-    # Merge B into A
-    session_a.merge(session_b, verify=False)
-
-    # A should now have the aggregate
-    aggregates = session_a.list_aggregates()
+    aggregates = session_a.results.export_aggregates("l_overlap", export_format="list")
     assert len(aggregates) == 1
-    assert aggregates[0]["field_name"] == "l_overlap"
+    assert aggregates[0]["field"] == "l_overlap"
 
 
 def test_session_list_aggregates_filters_by_field_name(temp_dir: Path) -> None:
-    """Test that list_aggregates can filter by field_name."""
+    """Test that export_aggregates returns only requested field."""
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
 
     session = Session(container=create_main_container(cfg))
 
-    session.ingest_aggregates([
-        {"field_name": "l_overlap", "context_models": ("m1", "m2"), "value": 1},
-        {"field_name": "r_overlap", "context_models": ("m1", "m2"), "value": 2},
-    ])
+    session.results.ingest_aggregates(
+        [
+            {"field_name": "l_overlap", "context_models": ("m1", "m2"), "value": 1},
+            {"field_name": "r_overlap", "context_models": ("m1", "m2"), "value": 2},
+        ]
+    )
 
-    filtered = session.list_aggregates(field_names=["l_overlap"])
+    filtered = session.results.export_aggregates("l_overlap", export_format="list")
     assert len(filtered) == 1
-    assert filtered[0]["field_name"] == "l_overlap"
+    assert filtered[0]["field"] == "l_overlap"
 
 
 def test_session_list_aggregates_filters_by_model_ids(temp_dir: Path) -> None:
-    """Test that list_aggregates can filter by model_ids."""
+    """Test that export_aggregates returns aggregates for a field (all context_models)."""
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
 
     session = Session(container=create_main_container(cfg))
 
-    session.ingest_aggregates([
-        {"field_name": "overlap", "context_models": ("m1", "m2"), "value": 1},
-        {"field_name": "overlap", "context_models": ("m3", "m4"), "value": 2},
-    ])
+    session.results.ingest_aggregates(
+        [
+            {"field_name": "overlap", "context_models": ("m1", "m2"), "value": 1},
+            {"field_name": "overlap", "context_models": ("m3", "m4"), "value": 2},
+        ]
+    )
 
-    filtered = session.list_aggregates(model_ids=["m1"])
-    assert len(filtered) == 1
-    assert "m1" in filtered[0]["context_models"]
+    # New API has no model_ids filter on export; we get all aggregates for the field
+    filtered = session.results.export_aggregates("overlap", export_format="list")
+    assert len(filtered) == 2
+    context_models_set = {frozenset(a["context_models"]) for a in filtered}
+    assert frozenset(("m1", "m2")) in context_models_set
+    assert frozenset(("m3", "m4")) in context_models_set

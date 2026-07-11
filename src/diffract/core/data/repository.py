@@ -7,12 +7,11 @@ for different data types (parameters, relations, etc.).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
 
-from diffract.core.compute.parallel import ParallelContext
+from diffract.core.parallel import ParallelContext
 from diffract.core.storage.interface import DEFAULT_TABLE
 
-from .proxy import DataProxy
 from .view import DataView
 
 if TYPE_CHECKING:
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     from diffract.core.cache.interface import ICacheManager
-    from diffract.core.metadata.interface import IMetadataIndex
+    from diffract.core.data.metadata.interface import IMetadataIndex
     from diffract.core.storage.interface import IStorageManager
 
 TMetadata = TypeVar("TMetadata")
@@ -29,7 +28,7 @@ TProxy = TypeVar("TProxy")
 logger = logging.getLogger(__name__)
 
 
-class DataRepository(Generic[TMetadata, TProxy]):
+class DataRepository[TMetadata, TProxy]:
     """Generic repository owning storage/cache/metadata and managing entity membership.
 
     Provides the infrastructure for persistent storage, metadata indexing, and
@@ -48,8 +47,8 @@ class DataRepository(Generic[TMetadata, TProxy]):
     TABLE: str = DEFAULT_TABLE
 
     # Schema for MetadataIndex - override in subclasses
-    METADATA_COLUMNS: dict[str, type] = {}
-    METADATA_INDEXES: list[str] = []
+    METADATA_COLUMNS: ClassVar[dict[str, type]] = {}
+    METADATA_INDEXES: ClassVar[list[str]] = []
 
     def __init__(
         self,
@@ -142,7 +141,7 @@ class DataRepository(Generic[TMetadata, TProxy]):
 
     def clear(self, erase: bool = False) -> None:
         """Clear repository membership and optionally erase storage data.
-        
+
         Args:
             erase: If True, also erase underlying storage data and cache.
                    If False, only clear membership (metadata index and proxy cache).

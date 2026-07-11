@@ -1,0 +1,38 @@
+# @package templates
+
+
+defaults:
+  - ../plot.yaml
+  - _self_
+  
+  
+violin:
+  _target_: diffract.viz.plots.ViolinPlot
+  x: ${refs.layer_cat}
+  y: ${refs.metric}
+  points: "outliers"
+  box_visible: true
+  meanline_visible: true
+  side: positive
+  bandwidth: null
+  
+  # x axis
+  x_title: ""
+  x_showgrid: false
+  x_showticklabels: false
+  
+  # y axis
+  y_title: ""
+  y_showticklabels: false
+  
+  # marker
+  marker_size: 2
+  
+  # jitter
+  jitter_enabled: true
+  jitter_width: 0.25
+  jitter_offset: -0.3
+  jitter_density_scale: true
+  jitter_seed: 42
+  jitter_color: ${refs.metric2}
+  jitter_coloraxis_id: 1

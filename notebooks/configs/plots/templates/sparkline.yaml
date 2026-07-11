@@ -1,0 +1,35 @@
+# @package templates
+
+
+defaults:
+  - ../plot.yaml
+  - _self_
+
+
+sparkline:
+  _target_: diffract.viz.plots.SparklinePlot
+  x: ${refs.layer}
+  y: null
+  group_by: ${refs.model}
+  show_bands: true
+  band_opacity: 0.3
+  band_line_width: 0.5
+  
+  # x axis
+  x_title: ""
+  x_showgrid: false
+  x_showticklabels: false
+  
+  # y axis
+  y_title: ""
+  y_showticklabels: false
+  
+  # marker
+  marker_size: 6
+  marker_color: ${refs.model}
+  marker_symbol: ${refs.model}
+  
+  # line
+  line_dash: ${refs.model}
+  line_color: ${refs.model}
+  

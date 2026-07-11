@@ -11,7 +11,9 @@ atomic and durable.
 
 Example:
     >>> storage_manager: IStorageManager = get_storage_manager()
-    >>> storage_manager.set_field("obj123", "result", computed_array, table="parameters")
+    >>> storage_manager.set_field(
+    ...     "obj123", "result", computed_array, table="parameters"
+    ... )
     >>> value = storage_manager.get_field("obj123", "result", table="parameters")
     >>> all_objects = storage_manager.list_objs(table="parameters")
 """

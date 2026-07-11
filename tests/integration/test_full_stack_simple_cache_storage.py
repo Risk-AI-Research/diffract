@@ -171,8 +171,7 @@ skip_not_implemented_types = true
     WiringConfiguration.wire(container)
     session = Session(container=container)
 
-    # Register kernel
-    registry = session._container.compute_singleton.kernel_registry()  # noqa: SLF001
+    registry = container.compute_singleton.kernel_registry()
 
     def w_sum(w: np.ndarray) -> float:
         return float(np.sum(w))
@@ -189,8 +188,7 @@ skip_not_implemented_types = true
         config=cfg_dict,
     )
 
-    # Pre-populate parameter
-    repo = session._parameter_repository  # noqa: SLF001
+    repo = container.nn.parameter_repository()
 
     meta = ParameterMetadata(
         uid="simple_test",
@@ -204,11 +202,9 @@ skip_not_implemented_types = true
     )
     proxy.set_field("weights", weights)
 
-    # Compute
-    session.compute("w_sum")
+    session.compute.apply("w_sum")
 
-    # Get results
-    result = session.get_results("w_sum", export_format="dict")
-    assert meta.uid in result.scalars
-    assert result.scalars[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
+    result = session.results.export_metrics("w_sum", export_format="dict")
+    assert meta.uid in result
+    assert result[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
 

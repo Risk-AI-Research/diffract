@@ -43,14 +43,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
 
     from diffract.core.cache.interface import ICacheManager
-    from diffract.core.compute.parallel import ParallelContext
+    from diffract.core.data.metadata.interface import IMetadataIndex
     from diffract.core.data.nn.params.schema import (
         FieldName,
         ParameterIndex,
         ParameterType,
         ParameterUID,
     )
-    from diffract.core.metadata.interface import IMetadataIndex
+    from diffract.core.parallel import ParallelContext
     from diffract.core.storage.interface import IStorageManager
 
 T = TypeVar("T")

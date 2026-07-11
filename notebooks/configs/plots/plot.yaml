@@ -1,0 +1,18 @@
+# @package _global_
+
+
+defaults:
+  - ./refs/default.yaml
+  - ./styling.yaml
+  - _self_
+  
+
+models: []
+models_range: 
+    _target_: builtins.list
+    _args_: 
+      - _target_: builtins.range
+        _args_: 
+          - _target_: builtins.len
+            _args_: 
+              - ${models}

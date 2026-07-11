@@ -34,6 +34,7 @@ if not import_utils.is_available("pandas"):
         """Stub formatter that raises when pandas is unavailable."""
 
         def __new__(cls, *_args: Any, **_kwargs: Any) -> Self:
+            """Raise ImportError because pandas is not installed."""
             msg = "pandas package not available"
             raise ImportError(msg)
 
@@ -68,8 +69,16 @@ else:
             scalar_records = build_scalar_records(param_results)
             aggregate_records = build_aggregate_records(aggregate_results)
 
-            scalars_df = pd.DataFrame(scalar_records) if scalar_records else pd.DataFrame(columns=[*SCALAR_COLUMNS, *fields])
-            aggregates_df = pd.DataFrame(aggregate_records) if aggregate_records else pd.DataFrame(columns=AGGREGATE_COLUMNS)
+            scalars_df = (
+                pd.DataFrame(scalar_records)
+                if scalar_records
+                else pd.DataFrame(columns=[*SCALAR_COLUMNS, *fields])
+            )
+            aggregates_df = (
+                pd.DataFrame(aggregate_records)
+                if aggregate_records
+                else pd.DataFrame(columns=AGGREGATE_COLUMNS)
+            )
 
             return StructuredExportResult(
                 scalars=scalars_df,

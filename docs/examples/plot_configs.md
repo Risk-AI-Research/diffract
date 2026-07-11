@@ -10,7 +10,7 @@ from diffract import Session
 session = Session(profile="local")
 
 with session:
-    fig = session.draw(config_path="examples/configs/boxplot_stable_rank.yaml")
+    fig = session.viz.draw(config_path="examples/configs/boxplot_stable_rank.yaml")
     fig.show()
 ```
 
@@ -20,11 +20,11 @@ A plot config file has two sections:
 
 ```yaml
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
-    _target_: diffract.viz.plots.scalar.BoxPlot
-    field: stable_rank
-    group_by: model_id
+    _target_: diffract.viz.plots.boxplot.BoxPlot
+    y: stable_rank
+    x: model_id
 
 config:
   layout:
@@ -35,17 +35,42 @@ config:
 - **`plot`**: Hydra-style specification of the plot class and its parameters
 - **`config`**: Additional Plotly layout options
 
+### Strings: field names vs literals
+
+Data axes (`x`, `y`, `z`, `group_by`) always interpret bare strings as field
+names. Style properties (`marker_color`, `line_color`, `jitter_color`,
+`marker_symbol`, `line_dash`) accept either a field name or a Plotly literal.
+The rule is deterministic and applied at config load: a string that is a valid
+Plotly literal of that kind (`"#1f77b4"`, `"steelblue"`, `"circle"`, `"dash"`)
+stays a literal, and anything else refers to a field. To style by a field
+whose name collides with a literal, or to control ordering and data type
+explicitly, use a `FieldRef`:
+
+```yaml
+plot:
+  _target_: diffract.viz.plots.boxplot.BoxPlot
+  y: stable_rank
+  x: model_id
+  marker_color:
+    _target_: diffract.viz.data.FieldRef
+    field: red
+```
+
+Coerced bare strings use first-occurrence ordering and auto-detected data
+type; `FieldRef` (optionally with `ordering`/`data_type`) is the explicit
+form.
+
 ## Example: Box plot
 
 ```yaml
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
-    _target_: diffract.viz.plots.scalar.BoxPlot
-    field: stable_rank
+    _target_: diffract.viz.plots.boxplot.BoxPlot
+    y: stable_rank
     title: "Stable Rank by Model"
-    group_by: model_id
-    color_by: model_id
+    x: model_id
+    marker_color: model_id
 
 config:
   layout:
@@ -57,12 +82,13 @@ config:
 
 ```yaml
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
     _target_: diffract.viz.plots.scatter.ScatterPlot
-    x_field: frob_norm
-    y_field: stable_rank
-    color_by: model_id
+    x: frob_norm
+    y: stable_rank
+    group_by: model_id
+    marker_color: model_id
     title: "Frobenius Norm vs Stable Rank"
 
 config:
@@ -77,7 +103,7 @@ Combine multiple plots in a grid:
 
 ```yaml
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   plot:
     _target_: diffract.viz.plots.subplots.GridPlot
     make_subplots_kwargs:
@@ -91,17 +117,17 @@ plot:
         col: 1
         title: "Greater Dim"
         plot:
-          _target_: diffract.viz.plots.scalar.BoxPlot
-          field: greater_dim
-          group_by: model_id
+          _target_: diffract.viz.plots.boxplot.BoxPlot
+          y: greater_dim
+          x: model_id
       - _target_: diffract.viz.plots.subplots.SubplotSpec
         row: 1
         col: 2
         title: "Stable Rank"
         plot:
-          _target_: diffract.viz.plots.scalar.BoxPlot
-          field: stable_rank
-          group_by: model_id
+          _target_: diffract.viz.plots.boxplot.BoxPlot
+          y: stable_rank
+          x: model_id
 
 config:
   layout:
@@ -149,7 +175,7 @@ Apply the theme:
 
 ```python
 with session:
-    fig = session.draw(
+    fig = session.viz.draw(
         config_path="my_plot.yaml",
         theme_path="my_theme.yaml"
     )
@@ -159,10 +185,12 @@ with session:
 
 | Class | Import path | Description |
 |-------|-------------|-------------|
-| `BoxPlot` | `diffract.viz.plots.scalar.BoxPlot` | Box plot for scalar fields |
+| `BoxPlot` | `diffract.viz.plots.boxplot.BoxPlot` | Box plot for scalar fields |
 | `ViolinPlot` | `diffract.viz.plots.violin.ViolinPlot` | Violin plot for distributions |
 | `ScatterPlot` | `diffract.viz.plots.scatter.ScatterPlot` | 2D scatter plot |
-| `ClusterBarChart` | `diffract.viz.plots.cluster.ClusterBarChart` | Clustered bar chart |
+| `SparklinePlot` | `diffract.viz.plots.sparkline.SparklinePlot` | Line/sparkline plot over a field |
+| `HeatmapPlot` | `diffract.viz.plots.heatmap.HeatmapPlot` | Heatmap pivoted by two categorical fields |
+| `ClusterBarChart` | `diffract.viz.plots.cluster.ClusterBarChart` | Binned profiles of array fields, one trace per group |
 | `GridPlot` | `diffract.viz.plots.subplots.GridPlot` | Multi-plot grid |
 
 ## Bundled examples
@@ -172,6 +200,5 @@ The repository includes ready-to-use configs in `examples/configs/`:
 - `boxplot_stable_rank.yaml` — basic box plot
 - `boxplot_stable_rank_jitter.yaml` — box plot with jittered points
 - `violin_weights_svals_jitter.yaml` — violin plot with overlay
-- `cluster_bar_chart_weights_svals.yaml` — clustered bar chart
 - `grid_example.yaml` — multi-panel layout
 - `theme_example.yaml` — custom theme

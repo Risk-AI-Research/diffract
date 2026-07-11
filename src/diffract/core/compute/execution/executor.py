@@ -17,10 +17,10 @@ from .parameter_runner import ParameterKernelRunner
 if TYPE_CHECKING:
     from concurrent.futures import ProcessPoolExecutor
 
-    from diffract.core.compute.parallel import ParallelContext
     from diffract.core.compute.registry import KernelRegistry
     from diffract.core.data.nn.aggregates import AggregateRepository
     from diffract.core.data.nn.params.interface import IParameterView
+    from diffract.core.parallel import ParallelContext
 
 logger = logging.getLogger(__name__)
 

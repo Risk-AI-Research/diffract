@@ -10,21 +10,21 @@ import logging
 import re
 import types
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Self, TypeVar
 
 from tqdm.auto import tqdm
 
-from diffract.core.compute.parallel import ParallelContext, map_maybe_parallel
 from diffract.core.constants import (
     PROGRESS_BAR_DELAY_SEC,
     PROGRESS_BAR_MIN_ITEMS,
 )
+from diffract.core.parallel import ParallelContext, map_maybe_parallel
 from diffract.core.utils.exceptions import format_exception_message
 
 from .interface import EntityIndex, EntityUID, FieldName
 
 if TYPE_CHECKING:
-    from .interface import IDataProxy, IDataRepository, IMetadata
+    from .interface import IDataRepository
 
 TMetadata = TypeVar("TMetadata")
 TProxy = TypeVar("TProxy")
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 _ERROR_PREVIEW_LIMIT = 10
 
 
-class DataView(Generic[TMetadata, TProxy]):
+class DataView[TMetadata, TProxy]:
     """Generic view over a subset of entities owned by a repository.
 
     Provides numpy-like view semantics with support for filtering,
@@ -235,9 +235,10 @@ class DataView(Generic[TMetadata, TProxy]):
                 for field_name in uid_fields:
                     if not proxy.try_prefetch_field(field_name):
                         return uid, False, f"Missing field: {field_name}"
-                return uid, True, None
             except Exception as e:  # noqa: BLE001
                 return uid, False, format_exception_message(e)
+            else:
+                return uid, True, None
 
         results = map_maybe_parallel(
             list(fields_by_uid.keys()),

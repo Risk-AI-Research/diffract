@@ -6,7 +6,6 @@ from numpy.typing import NDArray
 from diffract.core.compute.decorator import kernel
 from diffract.core.compute.execution.enums import (
     KernelApplyLevel,
-    KernelExecutionProtocol,
     KernelRestrictions,
 )
 
@@ -79,10 +78,29 @@ def max_vector_agreement(
     return cast("NDArray[np.floating[Any]]", result)
 
 
-@kernel(execution_protocol=KernelExecutionProtocol.PARALLEL)
-def svs_similarity(
-    weights_lsvs: NDArray[np.floating[Any]], weights_rsvs: NDArray[np.floating[Any]]
+@kernel(
+    name="avg_max_l_agreement",
+    require_fields=("max_l_agreement",),
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+)
+@kernel(
+    name="avg_max_r_agreement",
+    require_fields=("max_r_agreement",),
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+)
+@kernel(
+    name="avg_l_agreement",
+    require_fields=("l_agreement",),
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+)
+@kernel(
+    name="avg_r_agreement",
+    require_fields=("r_agreement",),
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+)
+def avg_vector_agreement(
+    agreement: NDArray[np.floating[Any]],
 ) -> NDArray[np.floating[Any]]:
-    """Compute similarity between left and right singular vectors."""
-    result = np.einsum("ij,ij->j", weights_lsvs, weights_rsvs)
+    """Return the mean of per-component agreement values."""
+    result = np.mean(agreement)
     return cast("NDArray[np.floating[Any]]", result)

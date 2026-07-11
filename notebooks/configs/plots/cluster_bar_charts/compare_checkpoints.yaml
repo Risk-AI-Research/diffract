@@ -1,22 +1,26 @@
 plot:
-  _target_: diffract.viz.plots.configurer.UpdateFigure
+  _target_: diffract.viz.plots.base.UpdateFigure
   layout:
     width: 1000
-    height: 500
+    height: 480
   yaxes:
-    title: "count per bin (mean; std below 0)"
+    title: "count per bin (mean over heads)"
+    type: log
+    dtick: 1
   plot:
     _target_: diffract.viz.plots.cluster.ClusterBarChart
     field: weights_svals
-    title: "Cluster bar chart (weights_svals)"
+    title: "Singular value spectrum: 16k vs 128k pre-train steps"
     parameter_names:
-      - re:.*(q|k|v|o)_proj_head.*layer=(01|04|07|10|13|16).*
+      - re:.*(q|k|v|o)_proj_head.*
 
-    group_by: [model_id, layer_id, head_id]
-    aggregate_by: head_id
-    color_by: layer_id
+    group_by: [model_id]
+    aggregate_by: null
+    color_by: model_id
     dash_by: model_id
+    legend_format: "{model_id}"
 
-    num_bins: 18
-    binning: exponential
-    draw_statistics: true
+    num_bins: 40
+    left_bound: 0.0
+    binning: linear
+    draw_statistics: false

@@ -7,19 +7,19 @@ for different data types (parameters, relations, etc.).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from diffract.core.storage.interface import DEFAULT_TABLE
 
 if TYPE_CHECKING:
-    from .interface import IDataRepository, IMetadata
+    from .interface import IDataRepository
 
 TMetadata = TypeVar("TMetadata")
 T = TypeVar("T")
 
 
 @dataclass(kw_only=True)
-class DataProxy(Generic[TMetadata]):
+class DataProxy[TMetadata]:
     """Generic lazy-loading proxy for storage-backed data entities.
 
     Provides efficient access to data through intelligent caching and

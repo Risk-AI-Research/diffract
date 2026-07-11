@@ -4,6 +4,41 @@ Configure storage and cache backends for different workloads.
 
 For profile selection, see [Configuration](../../reference/configuration.md).
 
+**Note:** The `ini` blocks in the backend sections below are fragments — each shows only the
+storage or cache portion of a config. A complete session config also requires `[metadata]`
+(with `[metadata.sqlite]`), `[cache]`, and `[nn.extractor]` sections. See the
+[complete minimal example](#complete-minimal-example) below, or start from the complete
+configs shipped in `src/diffract/configs/` (`sqlite.ini`, `hybrid.ini`,
+`fast_speed_without_disk.ini`).
+
+## Complete minimal example
+
+SQLite storage with an in-process cache. Save as `diffract.ini` and pass it to
+`Session(config_path="diffract.ini")`:
+
+```ini
+[storage]
+backend = "sqlite"
+
+[storage.sqlite]
+path = "data/diffract.db"
+
+[metadata]
+backend = "sqlite"
+
+[metadata.sqlite]
+path = "data/metadata.db"
+
+[cache]
+backend = "simple"
+
+[cache.simple]
+max_memory_mb = 512
+
+[nn.extractor]
+skip_not_implemented_types = true
+```
+
 ## Storage backends
 
 ### RAM
@@ -47,11 +82,18 @@ path = "data/arrays.h5"
 
 ### Hybrid (SQLite + HDF5)
 
-SQLite for metadata and small values, HDF5 for large arrays. Best of both worlds.
+SQLite for metadata and small values, HDF5 for large arrays. Metadata queries stay fast
+while large arrays don't bloat the SQLite file: values of `array_threshold` bytes or more
+are routed to the `heavy` backend, everything else to `light`.
 
 ```ini
 [storage]
 backend = "hybrid"
+
+[storage.hybrid]
+light = "sqlite"
+heavy = "hdf5"
+array_threshold = 1048576
 
 [storage.sqlite]
 path = "data/metadata.db"
@@ -85,6 +127,11 @@ SQLite for fast local metadata queries; Zarr for large arrays (often remote).
 [storage]
 backend = "hybrid"
 
+[storage.hybrid]
+light = "sqlite"
+heavy = "zarr"
+array_threshold = 1048576
+
 [storage.sqlite]
 path = ".diffract/metadata.db"
 
@@ -92,7 +139,7 @@ path = ".diffract/metadata.db"
 store_url = "s3://my-bucket/diffract-data"
 ```
 
-**Use case:** Local metadata + remote arrays (“cloud scale-out”) while keeping the same API.
+**Use case:** Local metadata queries with arrays in a remote object store, behind the same API.
 
 ## Cache backends
 
@@ -151,6 +198,10 @@ key_prefix = "diffract:cache:"
 
 ## Recommended setups
 
+These blocks show the storage and cache sections; a complete config additionally needs the
+`[metadata]` and `[nn.extractor]` sections from the
+[complete minimal example](#complete-minimal-example).
+
 ### Local development
 
 SQLite + simple cache. Works everywhere, no external services.
@@ -177,6 +228,11 @@ Hybrid storage prevents SQLite bloat from large weight arrays.
 [storage]
 backend = "hybrid"
 
+[storage.hybrid]
+light = "sqlite"
+heavy = "hdf5"
+array_threshold = 1048576
+
 [storage.sqlite]
 path = "data/meta.db"
 
@@ -197,6 +253,11 @@ Hybrid + Redis for shared caching across workers.
 ```ini
 [storage]
 backend = "hybrid"
+
+[storage.hybrid]
+light = "sqlite"
+heavy = "hdf5"
+array_threshold = 1048576
 
 [storage.sqlite]
 path = "data/meta.db"

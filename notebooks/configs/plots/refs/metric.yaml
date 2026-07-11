@@ -1,0 +1,22 @@
+# @package refs
+
+
+metric:
+    _target_: diffract.viz.data.FieldRef
+    field: null
+    
+metric2:
+    _target_: diffract.viz.data.FieldRef
+    field: null
+    
+metric3:
+    _target_: diffract.viz.data.FieldRef
+    field: null
+    
+metric4:
+    _target_: diffract.viz.data.FieldRef
+    field: null
+    
+metric5:
+    _target_: diffract.viz.data.FieldRef
+    field: null

@@ -11,17 +11,74 @@ from numpy.typing import NDArray
 import diffract.core.utils.imports as import_utils
 from diffract.core.compute.decorator import kernel
 
-_power_law_ext = import_utils.get_module("diffract.core.compute.extensions.power_law")
-Fit = None if _power_law_ext is None else getattr(_power_law_ext, "Fit", None)
-_DIFFRACT_FIT_AVAILABLE = Fit is not None
+# Availability is probed without importing the accelerated module itself:
+# importing it initializes the taichi runtime, which must not happen (and
+# must not be able to fail) during `import diffract`.
+_DIFFRACT_FIT_AVAILABLE = import_utils.is_available("taichi")
+
+_fit_class: Any = None
+_DIFFRACT_FIT_BROKEN = False
+
+# The statistical floor of the accelerated fitter: its xmin candidates
+# must leave a tail of MIN_TAIL_SIZE (50) points, per Clauset et al., so
+# below ~2x that it cannot fit at all. From this size up it is also
+# faster than the `powerlaw` library at every tail size once warm.
+AUTO_DIFFRACT_MIN_SIZE = 100
+
+FitMethod = Literal["auto", "powerlaw", "diffract"]
 
 
-def _require_diffract_fit() -> None:
-    if not _DIFFRACT_FIT_AVAILABLE or Fit is None:
-        raise ModuleNotFoundError(
-            "Taichi Fit implementation is not available. "
-            "Install the 'taichi' extra or use fit_method='powerlaw'."
-        )
+def _accelerated_fit_ready() -> bool:
+    """True when the accelerated implementation can actually initialize.
+
+    taichi may be importable yet fail at runtime initialization; `auto`
+    must degrade to the powerlaw library then, not raise.
+    """
+    global _DIFFRACT_FIT_BROKEN  # noqa: PLW0603
+    if _DIFFRACT_FIT_BROKEN or not _DIFFRACT_FIT_AVAILABLE:
+        return False
+    try:
+        _get_fit_class()
+    except ModuleNotFoundError:
+        _DIFFRACT_FIT_BROKEN = True
+        return False
+    return True
+
+
+def _resolve_fit_method(fit_method: FitMethod, data_size: int) -> str:
+    """Resolve `auto` to an implementation by data size and availability.
+
+    `auto` never raises over the accelerated path: explicit
+    fit_method="diffract" surfaces initialization errors instead.
+    """
+    if fit_method != "auto":
+        return fit_method
+    if data_size < AUTO_DIFFRACT_MIN_SIZE:
+        return "powerlaw"
+    return "diffract" if _accelerated_fit_ready() else "powerlaw"
+
+
+def _get_fit_class() -> Any:
+    """Import the accelerated Fit implementation on first use."""
+    global _fit_class  # noqa: PLW0603
+    if _fit_class is None:
+        try:
+            module = import_utils.get_module(
+                "diffract.core.compute.extensions.power_law"
+            )
+            _fit_class = None if module is None else module.Fit
+        except Exception as e:  # optional accelerator must not crash callers
+            raise ModuleNotFoundError(
+                "The accelerated 'diffract' fit implementation failed to "
+                f"initialize: {e}. Use fit_method='powerlaw' instead."
+            ) from e
+        if _fit_class is None:
+            raise ModuleNotFoundError(
+                "The accelerated 'diffract' fit implementation needs taichi. "
+                "Install it with: uv sync --extra taichi (or pip install "
+                "taichi), or use fit_method='powerlaw'."
+            )
+    return _fit_class
 
 
 # region general
@@ -29,10 +86,10 @@ def _require_diffract_fit() -> None:
 
 @kernel(name="pl_concentration", require_fields=("esd", "pl_esd_xmin"))
 @kernel(name="tpl_concentration", require_fields=("esd", "tpl_esd_xmin"))
-@kernel(name="expon_concentration", require_fields=("esd", "expon_concentration"))
+@kernel(name="expon_concentration", require_fields=("esd", "expon_esd_xmin"))
 def ht_concentration(esd: NDArray[np.floating[Any]], ht_esd_xmin: float) -> float:
     """Compute heavy-tailed concentration (tail size / total size)."""
-    tail_size = cast("int", np.sum(esd > ht_esd_xmin).item())
+    tail_size = cast("int", np.sum(esd >= ht_esd_xmin).item())
 
     return tail_size / esd.size
 
@@ -45,7 +102,7 @@ def ht_presence(esd_min: float, esd_max: float, ht_esd_xmin: float) -> float:
     esd_width = esd_max - esd_min
     ht_width = esd_max - ht_esd_xmin
 
-    return ht_width / esd_width
+    return ht_width / esd_width if esd_width > 0 else float("nan")
 
 
 @kernel(name="tpl_scale", require_fields=("esd_max", "tpl_lambda"))
@@ -87,11 +144,12 @@ def power_law_fit_powerlaw_implementation(
 def power_law_fit_diffract_implementation(
     data: NDArray[np.floating[Any]],
 ) -> tuple[float, float, float]:
-    """Fit power law using diffract's Taichi implementation."""
-    _require_diffract_fit()
-    distribution = "power_law"
-    fit = Fit(data, distribution)  # type: ignore[misc]
-    params = fit.fit_params()
+    """Fit power law using diffract's accelerated Taichi implementation."""
+    fit = _get_fit_class()(data, "power_law")
+    try:
+        params = fit.fit_params()
+    finally:
+        fit.close()
 
     pl_alpha, pl_esd_xmin, pl_ks = itemgetter("pl_alpha", "xmin", "ks_distance")(params)
 
@@ -102,40 +160,41 @@ def power_law_fit_diffract_implementation(
 def power_law_fit(
     esd: NDArray[np.floating[Any]],
     *,
-    fit_method: Literal["powerlaw", "diffract"] = "diffract",
+    fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float]:
-    """Fit power law distribution to ESD data."""
-    match fit_method:
+    """Fit power law distribution to ESD data.
+
+    `auto` uses the accelerated implementation when the taichi extra is
+    installed and the ESD is large enough for it to fit at all.
+    """
+    match _resolve_fit_method(fit_method, esd.size):
         case "powerlaw":
-            fit_implementation = power_law_fit_powerlaw_implementation
+            return power_law_fit_powerlaw_implementation(esd)
         case "diffract":
-            fit_implementation = power_law_fit_diffract_implementation
+            return power_law_fit_diffract_implementation(esd)
         case _:
             msg = (
-                f"Fit method {fit_method} not implemented, choose method from "
-                "('powerlaw', 'diffract')."
+                f"Fit method {fit_method!r} not implemented, choose method "
+                "from ('auto', 'powerlaw', 'diffract')."
             )
             raise ValueError(msg)
 
-    pl_alpha, pl_esd_xmin, pl_ks = fit_implementation(esd)
 
-    return pl_alpha, pl_esd_xmin, pl_ks
-
-
-@kernel
 def pl_p_value(
     esd: NDArray[np.floating[Any]], pl_alpha: float, pl_esd_xmin: float, pl_ks: float
 ) -> float:
-    """Compute p-value for power law fit."""
-    _require_diffract_fit()
-    fit = Fit(esd, "power_law")  # type: ignore[misc]
-    fit.set_params(
-        xmin=pl_esd_xmin,
-        pl_alpha=pl_alpha,
-        ks_distance=pl_ks,
-        tail_size=cast("float", np.sum(esd >= pl_esd_xmin).item()),
-    )
-    _, p_value = fit.p_value_test()
+    """Compute p-value for power law fit (requires the taichi extra)."""
+    fit = _get_fit_class()(esd, "power_law")
+    try:
+        fit.set_params(
+            xmin=pl_esd_xmin,
+            pl_alpha=pl_alpha,
+            ks_distance=pl_ks,
+            tail_size=cast("int", np.sum(esd >= pl_esd_xmin).item()),
+        )
+        _, p_value = fit.p_value_test()
+    finally:
+        fit.close()
 
     return p_value
 
@@ -173,11 +232,12 @@ def truncated_power_law_fit_powerlaw_implementation(
 def truncated_power_law_fit_diffract_implementation(
     data: NDArray[np.floating[Any]],
 ) -> tuple[float, float, float, float]:
-    """Fit truncated power law using diffract's Taichi implementation."""
-    _require_diffract_fit()
-    distribution = "truncated_power_law"
-    fit = Fit(data, distribution)  # type: ignore[misc]
-    params = fit.fit_params()
+    """Fit truncated power law using diffract's accelerated Taichi implementation."""
+    fit = _get_fit_class()(data, "truncated_power_law")
+    try:
+        params = fit.fit_params()
+    finally:
+        fit.close()
 
     tpl_alpha, tpl_lambda, tpl_esd_xmin, tpl_ks = itemgetter(
         "pl_alpha", "expon_lambda", "xmin", "ks_distance"
@@ -190,27 +250,26 @@ def truncated_power_law_fit_diffract_implementation(
 def truncated_power_law_fit(
     esd: NDArray[np.floating[Any]],
     *,
-    fit_method: Literal["powerlaw", "diffract"] = "diffract",
+    fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float, float]:
-    """Fit truncated power law distribution to ESD data."""
-    match fit_method:
+    """Fit truncated power law distribution to ESD data.
+
+    `auto` uses the accelerated implementation when the taichi extra is
+    installed and the ESD is large enough for it to fit at all.
+    """
+    match _resolve_fit_method(fit_method, esd.size):
         case "powerlaw":
-            fit_implementation = truncated_power_law_fit_powerlaw_implementation
+            return truncated_power_law_fit_powerlaw_implementation(esd)
         case "diffract":
-            fit_implementation = truncated_power_law_fit_diffract_implementation
+            return truncated_power_law_fit_diffract_implementation(esd)
         case _:
             msg = (
-                f"Fit method {fit_method} not implemented, choose method from "
-                "('powerlaw', 'diffract')."
+                f"Fit method {fit_method!r} not implemented, choose method "
+                "from ('auto', 'powerlaw', 'diffract')."
             )
             raise ValueError(msg)
 
-    tpl_alpha, tpl_lambda, tpl_esd_xmin, tpl_ks = fit_implementation(esd)
 
-    return tpl_alpha, tpl_lambda, tpl_esd_xmin, tpl_ks
-
-
-@kernel
 def tpl_p_value(
     esd: NDArray[np.floating[Any]],
     tpl_alpha: float,
@@ -218,17 +277,19 @@ def tpl_p_value(
     tpl_esd_xmin: float,
     tpl_ks: float,
 ) -> float:
-    """Compute p-value for truncated power law fit."""
-    _require_diffract_fit()
-    fit = Fit(esd, "truncated_power_law")  # type: ignore[misc]
-    fit.set_params(
-        xmin=tpl_esd_xmin,
-        pl_alpha=tpl_alpha,
-        expon_lambda=tpl_lambda,
-        ks_distance=tpl_ks,
-        tail_size=cast("float", np.sum(esd >= tpl_esd_xmin).item()),
-    )
-    _, p_value = fit.p_value_test()
+    """Compute p-value for truncated power law fit (requires the taichi extra)."""
+    fit = _get_fit_class()(esd, "truncated_power_law")
+    try:
+        fit.set_params(
+            xmin=tpl_esd_xmin,
+            pl_alpha=tpl_alpha,
+            expon_lambda=tpl_lambda,
+            ks_distance=tpl_ks,
+            tail_size=cast("int", np.sum(esd >= tpl_esd_xmin).item()),
+        )
+        _, p_value = fit.p_value_test()
+    finally:
+        fit.close()
 
     return p_value
 
@@ -265,11 +326,12 @@ def exponential_fit_powerlaw_implementation(
 def exponential_fit_diffract_implementation(
     data: NDArray[np.floating[Any]],
 ) -> tuple[float, float, float]:
-    """Fit exponential distribution using diffract's Taichi implementation."""
-    _require_diffract_fit()
-    distribution = "exponential"
-    fit = Fit(data, distribution)  # type: ignore[misc]
-    params = fit.fit_params()
+    """Fit exponential distribution using the accelerated implementation."""
+    fit = _get_fit_class()(data, "exponential")
+    try:
+        params = fit.fit_params()
+    finally:
+        fit.close()
 
     expon_lambda, expon_esd_xmin, expon_ks = itemgetter(
         "expon_lambda", "xmin", "ks_distance"
@@ -282,42 +344,51 @@ def exponential_fit_diffract_implementation(
 def exponential_fit(
     esd: NDArray[np.floating[Any]],
     *,
-    fit_method: Literal["powerlaw", "diffract"] = "diffract",
+    fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float]:
-    """Fit exponential distribution to ESD data."""
-    match fit_method:
+    """Fit exponential distribution to ESD data.
+
+    `auto` uses the accelerated implementation when the taichi extra is
+    installed and the ESD is large enough for it to fit at all.
+    """
+    match _resolve_fit_method(fit_method, esd.size):
         case "powerlaw":
-            fit_implementation = exponential_fit_powerlaw_implementation
+            return exponential_fit_powerlaw_implementation(esd)
         case "diffract":
-            fit_implementation = exponential_fit_diffract_implementation
+            return exponential_fit_diffract_implementation(esd)
         case _:
             msg = (
-                f"Fit method {fit_method} not implemented, choose method from "
-                "('powerlaw', 'diffract')."
+                f"Fit method {fit_method!r} not implemented, choose method "
+                "from ('auto', 'powerlaw', 'diffract')."
             )
             raise ValueError(msg)
 
-    expon_lambda, expon_esd_xmin, expon_ks = fit_implementation(esd)
 
-    return expon_lambda, expon_esd_xmin, expon_ks
-
-
-@kernel
 def expon_p_value(
     esd: NDArray[np.floating[Any]],
     expon_lambda: float,
     expon_esd_xmin: float,
     expon_ks: float,
 ) -> float:
-    """Compute p-value for exponential fit."""
-    _require_diffract_fit()
-    fit = Fit(esd, "exponential")  # type: ignore[misc]
-    fit.set_params(
-        xmin=expon_esd_xmin,
-        expon_lambda=expon_lambda,
-        ks_distance=expon_ks,
-        tail_size=cast("float", np.sum(esd >= expon_esd_xmin).item()),
-    )
-    _, p_value = fit.p_value_test()
+    """Compute p-value for exponential fit (requires the taichi extra)."""
+    fit = _get_fit_class()(esd, "exponential")
+    try:
+        fit.set_params(
+            xmin=expon_esd_xmin,
+            expon_lambda=expon_lambda,
+            ks_distance=expon_ks,
+            tail_size=cast("int", np.sum(esd >= expon_esd_xmin).item()),
+        )
+        _, p_value = fit.p_value_test()
+    finally:
+        fit.close()
 
     return p_value
+
+
+# The p-value kernels are only executable with the accelerated implementation,
+# so they join the registry only when it is importable.
+if _DIFFRACT_FIT_AVAILABLE:
+    kernel(pl_p_value)
+    kernel(tpl_p_value)
+    kernel(expon_p_value)

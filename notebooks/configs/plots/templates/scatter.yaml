@@ -1,0 +1,26 @@
+# @package templates
+
+
+defaults:
+  - ../plot.yaml
+  - _self_
+
+
+scatter:
+    _target_: diffract.viz.plots.ScatterPlot
+    x: ${refs.metric}
+    y: ${refs.metric2}
+    x_showticklabels: false
+    y_showticklabels: false
+    
+    group_by: ${refs.attn_ptype}
+
+    marker_size: 6
+    marker_opacity: 0.7
+    marker_color: ${refs.layer}
+    marker_symbol: ${refs.attn_ptype}
+    
+    marker_colorscale: portland
+    marker_colorbar_title: "layer"
+    marker_coloraxis_id: 1
+  

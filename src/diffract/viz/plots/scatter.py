@@ -1,153 +1,233 @@
-"""Generic scatter plots based on scalar fields."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any
 
-from diffract.core.data.nn.params.schema import ParameterType
-from diffract.core.utils import imports as import_utils
-from diffract.session import Session
-from diffract.viz.plots.common import (
-    as_float,
-    extract_meta_value,
-    fetch_data,
-    get_field_value,
+import plotly.graph_objects as go
+
+from diffract.viz.data import (
+    Entry,
+    FieldRef,
+    get_field_values,
+)
+from diffract.viz.plots.base.axis import AxisType, SupportsAxis
+from diffract.viz.plots.base.marker import SupportsMarker
+from diffract.viz.plots.base.plot import Plot
+from diffract.viz.styling import (
+    NumericPropertyResolver,
+    ResolvedColor,
 )
 
-if TYPE_CHECKING:  # pragma: no cover
-    import plotly.graph_objects as go  # type: ignore[import-not-found]
 
-    from diffract.viz.themes import Theme
+@dataclass(kw_only=True)
+class ScatterPlot(
+    Plot,
+    SupportsAxis("x", AxisType.NUMERIC),
+    SupportsAxis("y", AxisType.NUMERIC),
+    SupportsMarker,
+):
+    """Scatter plot for two numeric fields."""
 
+    y: FieldRef
+    y_rescale_range: tuple[float, float] | None = None
+    y_rescale_traces_separately: bool = False
 
-@dataclass(slots=True)
-class ScatterPlot:
-    """Scatter plot for two scalar fields.
+    x: FieldRef
+    x_rescale_range: tuple[float, float] | None = None
+    x_rescale_traces_separately: bool = False
 
-    Use `color_by` to color markers by a metadata key.
+    group_by: FieldRef | None = None
 
-    Example:
-        >>> plot = ScatterPlot(
-        ...     x_field="frob_norm",
-        ...     y_field="stable_rank",
-        ...     color_by="model_id",
-        ... )
-        >>> fig = session.draw(plot=plot)
-    """
+    def _build_traces_data(
+        self, entries: dict[str, Entry]
+    ) -> dict[str, dict[str, Any]]:
+        """Build per-group trace data dicts."""
+        x_resolver = NumericPropertyResolver(self.x_rescale_range)
+        y_resolver = NumericPropertyResolver(self.y_rescale_range)
 
-    x_field: str
-    y_field: str
-    title: str | None = None
-    x_title: str | None = None
-    y_title: str | None = None
-    group_by: str = "model_id"
-    parameter_uids: list[str] | None = None
-    parameter_names: list[str] | None = None
-    parameter_types: list[str] | None = None
-    model_ids: list[str] | None = None
-    opacity: float = 0.7
-    marker_size: int = 6
+        x_values = x_resolver.resolve(self.x, entries)
+        y_values = y_resolver.resolve(self.y, entries)
 
-    # Color customization
-    color_by: str | None = None
+        groups, group_indices = self._group_entries(entries, x_values, y_values)
 
-    # Symbol customization
-    marker_by: str | None = None
+        # 1) Resolve marker properties globally for all entries
+        resolved_color = self._resolve_marker_color(entries, self._theme)
+        resolved_symbol = self._resolve_marker_symbol(entries, self._theme)
+        resolved_size = self._resolve_marker_size(entries, self._theme)
+        resolved_opacity = self._resolve_marker_opacity(entries, self._theme)
 
-    # Theming
-    theme: Theme | None = None
+        group_keys = self._get_sorted_group_keys(groups)
 
-    def render(self, session: Session) -> go.Figure:
-        """Render the scatter plot using data from the session."""
-        go = import_utils.require("plotly.graph_objects")
-        from diffract.viz.colors import ColorMapper
-        from diffract.viz.themes import apply_theme
+        # 2) Build per-group traces
+        traces_data: dict[str, dict[str, Any]] = {}
 
-        ptypes = (
-            [ParameterType.from_string(p) for p in self.parameter_types]
-            if self.parameter_types
-            else None
-        )
+        for idx, group in enumerate(group_keys):
+            points = groups[group]
+            indices = group_indices[group]
 
-        results = fetch_data(
-            session,
-            [self.x_field, self.y_field],
-            parameter_uids=self.parameter_uids,
-            parameter_names=self.parameter_names,
-            parameter_types=ptypes,
-            model_ids=self.model_ids,
-        )
+            trace_x = [p[0] for p in points]
+            if self.x_rescale_traces_separately:
+                trace_x = x_resolver._normalize(trace_x)
 
-        xs_by_group: dict[str, list[float]] = {}
-        ys_by_group: dict[str, list[float]] = {}
-        color_vals_by_group: dict[str, list] = {}
-        marker_vals_by_group: dict[str, list] = {}
+            trace_y = [p[1] for p in points]
+            if self.y_rescale_traces_separately:
+                trace_y = y_resolver._normalize(trace_y)
 
-        all_color_vals: list = []
-        all_marker_vals: list = []
+            trace_id = f"scatter_{group}"
+            trace_data: dict[str, Any] = {
+                "group": group,
+                "group_idx": idx,
+                "x_values": trace_x,
+                "y_values": trace_y,
+            }
 
-        for entry in results.values():
-            meta = entry.get("metadata", {})
-            fields = entry.get("fields", {})
-            ctx = {"model_id": meta.get("model_id"), "parameter_name": meta.get("name")}
-            x = as_float(get_field_value(fields, self.x_field, **ctx))
-            y = as_float(get_field_value(fields, self.y_field, **ctx))
-            if x is None or y is None:
+            # 3) Pick per-group values and add to trace via mixin methods
+            self._add_marker_color_to_trace(
+                trace_data,
+                self._pick_group_color(indices, resolved_color),
+            )
+            self._add_marker_symbol_to_trace(
+                trace_data,
+                self._pick_group_scalar(indices, resolved_symbol),
+            )
+            self._add_marker_size_to_trace(
+                trace_data,
+                self._pick_group_values(indices, resolved_size),
+            )
+            self._add_marker_opacity_to_trace(
+                trace_data,
+                self._pick_group_values(indices, resolved_opacity),
+            )
+
+            traces_data[trace_id] = trace_data
+
+        return traces_data
+
+    def _group_entries(
+        self,
+        entries: dict[str, Entry],
+        x_values: list[Any],
+        y_values: list[Any],
+    ) -> tuple[dict[str, list[tuple[float, float]]], dict[str, list[int]]]:
+        """Group (x, y) pairs by the ``group_by`` field.
+
+        Returns:
+            groups: mapping from group key to list of (x, y) pairs.
+            group_indices: mapping from group key to original entry indices
+                (only entries with non-None x *and* y).
+        """
+        if self.group_by is not None:
+            group_values = get_field_values(entries, self.group_by.field)
+        else:
+            group_values = ["all"] * len(x_values)
+
+        groups: dict[str, list[tuple[float, float]]] = {}
+        group_indices: dict[str, list[int]] = {}
+
+        for i, (g_val, x_val, y_val) in enumerate(
+            zip(group_values, x_values, y_values, strict=False)
+        ):
+            if x_val is None or y_val is None:
                 continue
+            key = str(g_val) if g_val is not None else "null"
+            groups.setdefault(key, []).append((float(x_val), float(y_val)))
+            group_indices.setdefault(key, []).append(i)
 
-            key = str(meta.get(self.group_by, "null")) if self.group_by else "all"
-            xs_by_group.setdefault(key, []).append(x)
-            ys_by_group.setdefault(key, []).append(y)
+        return groups, group_indices
 
-            if self.color_by:
-                cv = extract_meta_value(entry, self.color_by)
-                color_vals_by_group.setdefault(key, []).append(cv)
-                if cv not in all_color_vals:
-                    all_color_vals.append(cv)
+    def _get_sorted_group_keys(self, groups: dict[str, list[Any]]) -> list[str]:
+        """Return group keys sorted according to ``group_by`` ordering."""
+        group_keys = list(groups.keys())
+        if self.group_by is None:
+            return group_keys
+        order_indices = self.group_by.ordering.argsort(group_keys)
+        return [str(group_keys[i]) for i in order_indices]
 
-            if self.marker_by:
-                mv = extract_meta_value(entry, self.marker_by)
-                marker_vals_by_group.setdefault(key, []).append(mv)
-                if mv not in all_marker_vals:
-                    all_marker_vals.append(mv)
+    @staticmethod
+    def _pick_group_color(
+        indices: list[int],
+        resolved_color: ResolvedColor,
+    ) -> ResolvedColor:
+        """Build a per-group ResolvedColor from a global ResolvedColor.
 
-        color_mapper = ColorMapper(theme=self.theme)
+        For continuous ``values``, slices to entries belonging to this group.
+        For categorical per-entry colors, picks the first entry's color
+        (within a group all entries share the same categorical color).
+        For a single color string, passes through as-is.
+        """
+        if resolved_color.values is not None:
+            filtered = [resolved_color.values[i] for i in indices]
+            return ResolvedColor(values=filtered)
 
+        if resolved_color.color is not None:
+            if isinstance(resolved_color.color, list):
+                if not resolved_color.color or not indices:
+                    return ResolvedColor()
+                return ResolvedColor(color=resolved_color.color[indices[0]])
+            return resolved_color
+
+        return resolved_color
+
+    @staticmethod
+    def _pick_group_scalar(
+        indices: list[int],
+        resolved: str | list[str] | None,
+    ) -> str | None:
+        """Pick a single categorical value for a group (first match).
+
+        If resolved is scalar or None — return as-is.
+        If resolved is a per-entry list — return the first entry's value.
+        """
+        if resolved is None or not isinstance(resolved, list):
+            return resolved
+        if not resolved or not indices:
+            return None
+        return resolved[indices[0]]
+
+    @staticmethod
+    def _pick_group_values(
+        indices: list[int],
+        resolved: float | list[float] | None,
+    ) -> float | list[float] | None:
+        """Slice a resolved numeric property for a group.
+
+        If resolved is scalar or None — return as-is.
+        If resolved is a per-entry list — filter to entries in this group.
+        """
+        if resolved is None or not isinstance(resolved, list):
+            return resolved
+        return [resolved[i] for i in indices]
+
+    def _build_figure(self) -> go.Figure:
+        """Build the Plotly figure with scatter traces."""
         fig = go.Figure()
-        for g in sorted(xs_by_group.keys()):
-            marker_cfg = dict(size=self.marker_size, opacity=self.opacity)
 
-            # Apply colors if color_by is set
-            if self.color_by and g in color_vals_by_group:
-                cvs = color_vals_by_group[g]
-                colors = [
-                    color_mapper.get_color(self.color_by, cv, all_color_vals)
-                    for cv in cvs
-                ]
-                marker_cfg["color"] = colors
+        if self._traces_data is None:
+            return fig
 
-            if self.marker_by and g in marker_vals_by_group:
-                mvs = marker_vals_by_group[g]
-                symbols = [
-                    color_mapper.get_symbol_for_value(
-                        self.marker_by, mv, all_marker_vals
-                    )
-                    for mv in mvs
-                ]
-                marker_cfg["symbol"] = symbols
+        for trace_id, trace_data in self._traces_data.items():
+            group = trace_data["group"]
+            x_vals = trace_data["x_values"]
+            y_vals = trace_data["y_values"]
+
+            if not x_vals:
+                continue
 
             fig.add_trace(
                 go.Scatter(
-                    x=xs_by_group[g],
-                    y=ys_by_group[g],
-                    name=g,
+                    x=x_vals,
+                    y=y_vals,
+                    name=group,
                     mode="markers",
-                    marker=marker_cfg,
+                    legendgroup=group,
+                    meta={"trace_id": trace_id},
                 )
             )
 
-        fig.update_layout(title=self.title or f"{self.y_field} vs {self.x_field}")
-        fig.update_xaxes(title=self.x_title or self.x_field)
-        fig.update_yaxes(title=self.y_title or self.y_field)
-        return apply_theme(fig, self.theme)
+        # Title
+        if self.title:
+            fig.update_layout(title=self.title)
+        else:
+            fig.update_layout(title=f"{self.y.field} vs {self.x.field}")
+
+        return fig

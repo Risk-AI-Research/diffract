@@ -90,5 +90,4 @@ class ParameterDataProxy(DataProxy[ParameterMetadata]):
         Returns:
             New parameter proxy with metadata stored.
         """
-        proxy = super().create_and_store(meta=meta, repository=repository)
-        return proxy  # type: ignore[return-value]
+        return super().create_and_store(meta=meta, repository=repository)

@@ -29,7 +29,7 @@ AggregateData structure:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from diffract.core.data.nn.aggregates.view import AggregateView
@@ -42,7 +42,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class StructuredExportResult(Generic[T]):
+class StructuredExportResult[T]:
     """Container for structured export with separate scalar and aggregate data.
 
     Scalars are per-parameter fields (e.g., frob_norm, stable_rank).

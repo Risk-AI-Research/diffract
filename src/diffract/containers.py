@@ -24,10 +24,10 @@ from .core.compute.containers import (
     ComputeSingletonContainer,
     ComputeSingletonContainerWiringConfig,
 )
-from .core.compute.parallel import ParallelSingletonContainer
+from .core.data.metadata.containers import MetadataContainer
 from .core.data.nn.containers import ModelParametersContainer
 from .core.export.containers import ExportContainer
-from .core.metadata.containers import MetadataContainer
+from .core.parallel import ParallelSingletonContainer
 from .core.storage.containers import StorageContainer
 from .core.utils.exceptions import format_exception_message
 
@@ -161,7 +161,7 @@ def _parse_ini_config(path: Path) -> dict[str, Any]:
 def _default_config_path() -> Path | None:
     """Return the default launch config path if present."""
     with contextlib.suppress(FileNotFoundError):
-        return _resolve_packaged_or_repo_path("configs/ram.ini")
+        return _resolve_packaged_or_repo_path(PROFILES["ram"])
     return None
 
 
@@ -268,6 +268,8 @@ class WiringConfiguration:
                 modules=[
                     __name__,
                     "diffract.session",
+                    "diffract.session.namespaces",
+                    "diffract.session.namespaces.models",
                 ],
             )
 
@@ -373,6 +375,16 @@ def create_main_container(
                     continue
                 cur[k] = str(base_path / value)
     container.config.from_dict(resolved)
+
+    # Configs without a [logging] section get the fallback silently.
+    if not resolved.get("logging"):
+        container.config.logging.override(_FALLBACK_LOGGING_CONFIG)
+
+    # logging.config.dictConfig cannot create missing log directories itself.
+    for handler in resolved.get("logging", {}).get("handlers", {}).values():
+        filename = handler.get("filename") if isinstance(handler, dict) else None
+        if isinstance(filename, str):
+            Path(filename.strip().strip('"')).parent.mkdir(parents=True, exist_ok=True)
 
     try:
         container.logging_config()

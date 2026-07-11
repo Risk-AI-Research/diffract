@@ -1,0 +1,77 @@
+# @package _global_
+
+defaults:
+  - templates/default.yaml
+  - _self_
+
+subplot_template: ???
+
+metrics: []
+  
+plot:
+  _target_: diffract.viz.plots.UpdateFigure
+  layout:
+    width: 1200
+    height: 800
+    coloraxis1:
+      colorscale: portland
+      
+  plot:
+    _target_: diffract.viz.plots.subplots.build_bound_grid
+    make_subplots_kwargs:
+      shared_yaxes: false
+      shared_xaxes: false
+      horizontal_spacing: 0.005
+      vertical_spacing: 0.01
+      
+    plot_template: ${subplot_template}
+    
+    title_template: ""
+    
+    row:
+      _target_: diffract.viz.plots.subplots.GridAxisBind
+      target: "plot"
+      key: "y"
+      values:
+        _target_: builtins.list
+        _args_:
+        - _target_: builtins.map
+          _args_:
+            - _target_: diffract.viz.data.FieldRef
+              _partial_: true
+            - ${metrics}
+      labels: ${metrics}
+            
+    col:
+      _target_: diffract.viz.plots.subplots.GridAxisBind
+      target: "plot"
+      key: "x"
+      values:
+        _target_: builtins.list
+        _args_:
+        - _target_: builtins.map
+          _args_:
+            - _target_: diffract.viz.data.FieldRef
+              _partial_: true
+            - ${metrics}
+      labels: ${metrics}
+      
+    cell_rules:
+    - _target_: diffract.viz.plots.subplots.GridCellRule
+      selector: 
+        _target_: diffract.viz.plots.subplots.CellSelector
+        where: "first_col"
+      plot:
+        y_showticklabels: true
+      plot_format:
+        y_title: "{row_label}"
+        
+    - _target_: diffract.viz.plots.subplots.GridCellRule
+      selector: 
+        _target_: diffract.viz.plots.subplots.CellSelector
+        where: "last_row"
+      plot:
+        x_showticklabels: true
+      plot_format:
+        x_title: "{col_label}"
+        

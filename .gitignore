@@ -1,3 +1,7 @@
+# Library artifacts
+model_checkpoints
+.diffract
+
 # Byte-compiled / optimized
 __pycache__/
 *.py[cod]

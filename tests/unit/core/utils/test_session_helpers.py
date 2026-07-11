@@ -7,13 +7,16 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
-from diffract.core.utils.session import (
-    FieldIngester,
-    FieldIngestionError,
+pytest.importorskip("plotly")
+
+from diffract.session.namespaces.models.parameters.meta_patcher import (
     MetadataPatcher,
     MetadataPatchError,
-    ResultsEraser,
-    ResultsEraserError,
+)
+from diffract.session.namespaces.results.eraser import ResultsEraser, ResultsEraserError
+from diffract.session.namespaces.results.injester import (
+    FieldIngester,
+    FieldIngestionError,
 )
 
 if TYPE_CHECKING:
@@ -241,8 +244,8 @@ class TestMetadataPatcher:
             force=True,
         )
 
-        # Verify metadata_index.update was called
-        mock_metadata_index.update.assert_called_once()
+        # Verify metadata_index.upsert was called
+        mock_metadata_index.upsert.assert_called_once()
 
 
 class TestResultsEraser:
@@ -253,7 +256,7 @@ class TestResultsEraser:
         registry = MockKernelRegistry(producible_fields={"known_field"})
         eraser = ResultsEraser(kernel_registry=registry)
 
-        with pytest.raises(ResultsEraserError, match="cannot produce"):
+        with pytest.raises(ResultsEraserError, match="Registry cannot produce"):
             eraser.resolve_fields_to_erase(
                 ["nonexistent_field"], erase_dependent_also=False
             )
@@ -275,8 +278,7 @@ class TestResultsEraser:
         eraser = ResultsEraser(kernel_registry=registry)
         view = MockParameterView()
 
-        # Fields with regex special characters
-        eraser.erase(view=view, fields={"metric[0]", "loss.total"})
+        eraser.erase(parameters=view, fields={"metric[0]", "loss.total"})
 
         # Verify patterns are escaped (should contain backslash escapes)
         assert hasattr(view, "_erased_patterns")
@@ -286,16 +288,13 @@ class TestResultsEraser:
         assert any(r"\[0\]" in p for p in patterns)
         assert any(r"\." in p for p in patterns)
 
-    def test_erase_includes_contextual_pattern(self) -> None:
-        """Erase patterns should match contextual field suffixes."""
+    def test_erase_calls_erase_fields_with_regexp(self) -> None:
+        """Erase should call parameter view with escaped field patterns."""
         registry = MockKernelRegistry()
         eraser = ResultsEraser(kernel_registry=registry)
         view = MockParameterView()
 
-        eraser.erase(view=view, fields={"metric"})
+        eraser.erase(parameters=view, fields={"metric"})
 
-        # Pattern should match "metric" and "metric@anything"
         assert hasattr(view, "_erased_patterns")
-        patterns = view._erased_patterns
-        assert len(patterns) == 1
-        assert "(@.+)?" in patterns[0]
+        assert view._erased_patterns == ["metric"]

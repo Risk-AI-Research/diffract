@@ -46,8 +46,7 @@ def build_scalar_records(results: ResultData) -> list[dict[str, Any]]:
             if key not in ["model_id", "name", "parameter_type"]:
                 scalar_record[f"meta_{key}"] = value
 
-        for field_name, value in field_values.items():
-            scalar_record[field_name] = value
+        scalar_record.update(field_values)
 
         # Only add record if it has data beyond base metadata
         if len(scalar_record) > len(base_meta):

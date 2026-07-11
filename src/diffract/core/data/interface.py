@@ -17,7 +17,6 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
-    Generic,
     Protocol,
     Self,
     TypeVar,
@@ -30,8 +29,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
 
     from diffract.core.cache.interface import ICacheManager
-    from diffract.core.compute.parallel import ParallelContext
-    from diffract.core.metadata.interface import IMetadataIndex
+    from diffract.core.data.metadata.interface import IMetadataIndex
+    from diffract.core.parallel import ParallelContext
     from diffract.core.storage.interface import IStorageManager
 
 

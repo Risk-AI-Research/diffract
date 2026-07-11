@@ -7,6 +7,7 @@ provide optional metadata.
 
 Components:
     - base: Abstract handler interface and lightweight registry
+    - numpy_handlers: NumPy handlers for dense parameters
     - torch_handlers: PyTorch handlers for dense parameters
 
 Example:
@@ -21,12 +22,14 @@ Example:
 
 from .base import ParameterHandler, ParameterHandlerRegistry
 from .flax_handlers import FlaxDenseHandler
+from .numpy_handlers import NumpyDenseHandler
 from .onnx_handlers import OnnxDenseHandler
 from .tensorflow_handlers import TensorFlowDenseHandler
 from .torch_handlers import TorchDenseHandler, TorchStateDictDenseHandler
 
 __all__ = [
     "FlaxDenseHandler",
+    "NumpyDenseHandler",
     "OnnxDenseHandler",
     "ParameterHandler",
     "ParameterHandlerRegistry",

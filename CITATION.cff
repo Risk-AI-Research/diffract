@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "If you use Diffract or build on the paper, please cite the paper below."
+title: "Diffract: Spectral View of LLM Domain Adaptation"
+type: software
+repository-code: "https://github.com/Risk-AI-Research/diffract"
+license: Apache-2.0
+authors:
+  - given-names: Nikita
+    family-names: Borodin
+  - given-names: Maria
+    family-names: Krylova
+  - given-names: Artem
+    family-names: Zabolotnyi
+  - given-names: Dmitry
+    family-names: Aspisov
+  - given-names: Egor
+    family-names: Shikov
+  - given-names: Nikita
+    family-names: Tyuplyaev
+  - given-names: Oleg
+    family-names: Travkin
+  - given-names: Roman
+    family-names: Alferov
+  - given-names: Dmitry
+    family-names: Vinichenko
+preferred-citation:
+  type: conference-paper
+  title: "Diffract: Spectral View of LLM Domain Adaptation"
+  year: 2026
+  collection-title: "Proceedings of the 43rd International Conference on Machine Learning (ICML)"
+  url: "https://openreview.net/forum?id=XBUHoiAGDE"
+  authors:
+    - given-names: Nikita
+      family-names: Borodin
+    - given-names: Maria
+      family-names: Krylova
+    - given-names: Artem
+      family-names: Zabolotnyi
+    - given-names: Dmitry
+      family-names: Aspisov
+    - given-names: Egor
+      family-names: Shikov
+    - given-names: Nikita
+      family-names: Tyuplyaev
+    - given-names: Oleg
+      family-names: Travkin
+    - given-names: Roman
+      family-names: Alferov
+    - given-names: Dmitry
+      family-names: Vinichenko

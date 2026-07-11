@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from diffract.core.compute.parallel import ParallelContext, calibrate_thread_pool_overhead
+from diffract.core.parallel import ParallelContext, calibrate_thread_pool_overhead
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository

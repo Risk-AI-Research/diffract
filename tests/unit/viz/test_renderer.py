@@ -14,10 +14,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_render_basic(mock_session) -> None:
     """render should produce a figure."""
-    from diffract.viz.plots.scalar import BoxPlot
+    from diffract.viz.data import FieldRef
+    from diffract.viz.plots.boxplot import BoxPlot
     from diffract.viz.renderer import render
 
-    plot = BoxPlot(field="stable_rank")
+    plot = BoxPlot(y=FieldRef("stable_rank"), x=FieldRef("model_id"))
     fig = render(plot, session=mock_session)
 
     import plotly.graph_objects as go
@@ -27,12 +28,13 @@ def test_render_basic(mock_session) -> None:
 
 def test_render_with_theme(mock_session) -> None:
     """render should apply theme when provided."""
-    from diffract.viz.plots.scalar import BoxPlot
+    from diffract.viz.data import FieldRef
+    from diffract.viz.plots.boxplot import BoxPlot
     from diffract.viz.renderer import render
-    from diffract.viz.themes import Theme
+    from diffract.viz.styling import LayoutStyle, Theme
 
-    theme = Theme(width=777)
-    plot = BoxPlot(field="stable_rank")
+    theme = Theme(layout=LayoutStyle(width=777))
+    plot = BoxPlot(y=FieldRef("stable_rank"), x=FieldRef("model_id"))
     fig = render(plot, session=mock_session, theme=theme)
 
     assert fig.layout.width == 777
@@ -53,9 +55,9 @@ font_family: "Helvetica"
         f.flush()
         theme = load_theme(f.name)
 
-    assert theme.width == 888
-    assert theme.height == 444
-    assert theme.font_family == "Helvetica"
+    assert theme.layout.width == 888
+    assert theme.layout.height == 444
+    assert theme.typography.font_family == "Helvetica"
 
 
 def test_render_from_config_basic(mock_session) -> None:

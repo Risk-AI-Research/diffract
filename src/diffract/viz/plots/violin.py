@@ -1,293 +1,298 @@
-"""Violin plots based on Session public APIs.
-
-Generic distribution plot for scalar or array-like fields. Array-like values
-are flattened into samples.
-"""
-
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 import numpy as np
+import plotly.graph_objects as go
 
-from diffract.core.data.nn.params.schema import ParameterType
-from diffract.core.utils import imports as import_utils
-from diffract.session import Session
-from diffract.viz.plots.common import (
-    as_float,
-    density_scaled_jitter,
-    extract_meta_value,
-    fetch_data,
-    get_field_value,
+from diffract.viz.data import (
+    DataType,
+    Entry,
+    FieldRef,
+)
+from diffract.viz.plots.base.axis import AxisType, SupportsAxis
+from diffract.viz.plots.base.jitter import SupportsJitter
+from diffract.viz.plots.base.marker import SupportsMarker
+from diffract.viz.plots.base.plot import Plot
+from diffract.viz.styling import (
+    CategoricalPropertyResolver,
+    NumericPropertyResolver,
+    ResolvedColor,
 )
 
-if TYPE_CHECKING:  # pragma: no cover
-    import plotly.graph_objects as go  # type: ignore[import-not-found]
 
-    from diffract.viz.themes import Theme
+@dataclass(kw_only=True)
+class ViolinPlot(
+    Plot,
+    SupportsJitter,
+    SupportsAxis("x", AxisType.CATEGORICAL),
+    SupportsAxis("y", AxisType.NUMERIC),
+    SupportsMarker,
+):
+    """Violin plot for a scalar or vector numeric field.
 
+    Supports grouping by categorical x-axis and color customization via marker
+    properties. Violin-specific options include box/meanline visibility, side
+    rendering, and bandwidth.
 
-def _as_samples(value: Any) -> list[float]:
-    """Convert a scalar / array-like to a list of float samples."""
-    if value is None:
-        return []
-
-    if isinstance(value, (int, float)):
-        f = as_float(value)
-        return [] if f is None else [f]
-
-    if isinstance(value, np.ndarray):
-        if value.size == 0:
-            return []
-        out: list[float] = []
-        for x in value.ravel():
-            f = as_float(x)
-            if f is not None:
-                out.append(f)
-        return out
-
-    if isinstance(value, (list, tuple)):
-        out = []
-        for x in value:
-            f = as_float(x)
-            if f is not None:
-                out.append(f)
-        return out
-
-    f = as_float(value)
-    return [] if f is None else [f]
-
-
-@dataclass(slots=True)
-class ViolinPlot:
-    """Violin plot for a field (scalar or array-like).
-
-    - For scalar fields: behaves similarly to BoxPlot but with violins.
-    - For array-like fields (e.g. singular values): all elements are flattened
-      into samples.
-
-    Use `color_by` to color violins by a metadata key.
-
-    Example:
-        >>> plot = ViolinPlot(
-        ...     field="esd",
-        ...     title="ESD Distribution",
-        ...     group_by="model_id",
-        ...     jitter=True,
-        ... )
-        >>> fig = session.draw(plot=plot)
+    When ``y`` is a vector field (e.g., an eigenvalue spectrum per entry), the array
+    is automatically expanded into individual observations for the violin.
     """
 
-    field: str
-    title: str | None = None
-    x_title: str | None = None
-    y_title: str | None = None
-    group_by: str = "model_id"
+    y: FieldRef
+    y_rescale_range: tuple[float, float] | None = None
+    y_rescale_traces_separately: bool = False
 
-    # Filtering
-    parameter_uids: list[str] | None = None
-    parameter_names: list[str] | None = None
-    parameter_types: list[str] | None = None
-    model_ids: list[str] | None = None
+    x: FieldRef
 
-    # Visual options
     points: Literal["all", "outliers", False] = "outliers"
     box_visible: bool = True
     meanline_visible: bool = True
     side: Literal["positive", "negative", "both"] = "positive"
     bandwidth: float | None = None
 
-    # Color customization
-    color_by: str | None = None
-    marker_by: str | None = None  # Metadata key to set jitter marker symbols by
+    def _build_traces_data(
+        self, entries: dict[str, Entry]
+    ) -> dict[str, dict[str, Any]]:
+        """Build trace data dict for each group (category on x-axis)."""
+        x_resolver = CategoricalPropertyResolver()
+        y_resolver = NumericPropertyResolver(self.y_rescale_range)
 
-    # Jitter overlay
-    jitter: bool = False
-    jitter_width: float = 0.17  # Matches reference VIOLINS_JITTER_WIDTH
-    jitter_offset: float = -0.4  # Places jitter left of violin
-    jitter_seed: int = 42
-    jitter_density_scale: bool = True
-    jitter_marker_size: int = 4
-    jitter_opacity: float = 0.7
-    jitter_color_field: str | None = None
-    jitter_colorscale: str = "Viridis"
-    jitter_show_colorbar: bool = False
+        # The x axis is categorical by design; without an explicit
+        # data_type digit-like string fields (layer_id, head_id) would be
+        # detected as numeric and rejected.
+        x_ref = replace(self.x, data_type=self.x.data_type or DataType.CATEGORICAL)
+        x_values = x_resolver.resolve(x_ref, entries)
+        y_values = y_resolver.resolve(self.y, entries)
 
-    # Theming
-    theme: Theme | None = None
+        sorted_categories = self._get_sorted_categories(x_values)
+        category_order = self._get_effective_category_order(sorted_categories)
+        groups = self._group_by_category(x_values, y_values, category_order)
 
-    def render(self, session: Session) -> go.Figure:
-        """Render the violin plot using data from the session."""
-        go = import_utils.require("plotly.graph_objects")
-        from diffract.viz.colors import ColorMapper
-        from diffract.viz.themes import apply_theme
+        # 1) Resolve globally for all entries
+        resolved_size = self._resolve_marker_size(entries, self._theme)
+        resolved_opacity = self._resolve_marker_opacity(entries, self._theme)
+        resolved_symbol = self._resolve_marker_symbol(entries, self._theme)
+        resolved_color = self._resolve_marker_color(entries, self._theme)
+        resolved_jitter_color = self._resolve_jitter_color(entries, self._theme)
 
-        ptypes = (
-            [ParameterType.from_string(p) for p in self.parameter_types]
-            if self.parameter_types
-            else None
-        )
+        # 2) Build per-category traces
+        traces_data: dict[str, dict[str, Any]] = {}
 
-        fields_to_compute = [self.field]
-        if self.jitter and self.jitter_color_field is not None:
-            fields_to_compute.append(self.jitter_color_field)
+        for idx, category in enumerate(category_order):
+            trace_id = f"violin_{category}"
 
-        results = fetch_data(
-            session,
-            fields_to_compute,
-            parameter_uids=self.parameter_uids,
-            parameter_names=self.parameter_names,
-            parameter_types=ptypes,
-            model_ids=self.model_ids,
-        )
+            trace_y = groups[category]
+            if self.y_rescale_traces_separately:
+                trace_y = y_resolver._normalize(trace_y)
 
-        groups: dict[str, list[float]] = {}
-        jitter_colors: dict[str, list[float]] = {}
-        color_by_values: dict[str, Any] = {}
-        marker_by_values: dict[str, list[Any]] = {}
+            trace_data: dict[str, Any] = {
+                "category": category,
+                "category_idx": idx,
+                "jitter_x_center": float(idx),
+                "jitter_xaxis": "x2",
+                "y_values": trace_y,
+            }
 
-        for entry in results.values():
-            meta = entry.get("metadata", {})
-            fields = entry.get("fields", {})
-            ctx = {"model_id": meta.get("model_id"), "parameter_name": meta.get("name")}
-            samples = _as_samples(get_field_value(fields, self.field, **ctx))
-            if not samples:
-                continue
-
-            colors: list[float] | None = None
-            if self.jitter and self.jitter_color_field is not None:
-                color_raw = get_field_value(fields, self.jitter_color_field, **ctx)
-                if isinstance(color_raw, (int, float)):
-                    c = as_float(color_raw)
-                    if c is not None:
-                        colors = [c] * len(samples)
-                else:
-                    c_samples = _as_samples(color_raw)
-                    if len(c_samples) == len(samples):
-                        colors = c_samples
-
-                if colors is None:
-                    colors = [float("nan")] * len(samples)
-
-            if not self.group_by:
-                key = "all"
-            elif self.group_by == "parameter_name":
-                key = str(meta.get("name"))
-            else:
-                key = str(meta.get(self.group_by, "null"))
-
-            groups.setdefault(key, []).extend(samples)
-            if self.jitter:
-                jitter_colors.setdefault(key, []).extend(colors or [])
-
-            if self.marker_by:
-                mv = extract_meta_value(entry, self.marker_by)
-                # replicate marker value for every sample coming from this entry
-                marker_by_values.setdefault(key, []).extend([mv] * len(samples))
-
-            if self.color_by:
-                cb_val = extract_meta_value(entry, self.color_by)
-                if cb_val is not None:
-                    color_by_values[key] = cb_val
-
-        fig = go.Figure()
-        names = sorted(groups.keys())
-
-        color_mapper = ColorMapper(theme=self.theme)
-        all_color_vals = list(color_by_values.values()) if self.color_by else []
-        all_marker_vals: list[Any] = []
-        if self.marker_by:
-            for vs in marker_by_values.values():
-                for v in vs:
-                    if v not in all_marker_vals:
-                        all_marker_vals.append(v)
-
-        use_coloraxis = self.jitter and (self.jitter_color_field is not None)
-        if use_coloraxis:
-            fig.update_layout(
-                coloraxis=dict(
-                    colorscale=self.jitter_colorscale,
-                    colorbar=(
-                        dict(orientation="h") if self.jitter_show_colorbar else None
-                    ),
-                )
+            # 3) Slice resolved values for this category and add to trace
+            self._add_marker_size_to_trace(
+                trace_data,
+                self._pick_category_values(x_values, y_values, category, resolved_size),
+            )
+            self._add_marker_opacity_to_trace(
+                trace_data,
+                self._pick_category_values(
+                    x_values, y_values, category, resolved_opacity
+                ),
+            )
+            self._add_marker_symbol_to_trace(
+                trace_data,
+                self._pick_category_scalar(x_values, category, resolved_symbol),
+            )
+            self._add_marker_color_to_trace(
+                trace_data,
+                self._pick_category_color(x_values, y_values, category, resolved_color),
             )
 
-        for idx, name in enumerate(names):
-            ys = np.asarray(groups[name], dtype=np.float64)
-            xs = np.full(ys.size, idx, dtype=np.float64)
-
-            # Determine violin color
-            line_color = None
-            if self.color_by and name in color_by_values:
-                line_color = color_mapper.get_color(
-                    self.color_by, color_by_values[name], all_color_vals
+            if resolved_jitter_color is not None:
+                self._add_jitter_color_to_trace(
+                    trace_data,
+                    self._pick_category_color(
+                        x_values, y_values, category, resolved_jitter_color
+                    ),
                 )
+
+            traces_data[trace_id] = trace_data
+
+        return traces_data
+
+    def _get_sorted_categories(self, x_values: list[Any]) -> list[str]:
+        """Get unique categories sorted according to x ordering."""
+        unique_categories = list(dict.fromkeys(x_values))
+        order_indices = self.x.ordering.argsort(unique_categories)
+        return [str(unique_categories[i]) for i in order_indices]
+
+    def _get_effective_category_order(self, sorted_categories: list[str]) -> list[str]:
+        """Resolve category order used for both traces and jitter centers."""
+        if self.x_categoryorder != "array" or self.x_categoryarray is None:
+            return sorted_categories
+
+        preferred = [str(category) for category in self.x_categoryarray]
+        preferred_existing = [
+            category for category in preferred if category in sorted_categories
+        ]
+        remaining = [
+            category
+            for category in sorted_categories
+            if category not in preferred_existing
+        ]
+        return preferred_existing + remaining
+
+    def _group_by_category(
+        self, x_values: list[Any], y_values: list[Any], categories: list[str]
+    ) -> dict[str, list[float]]:
+        """Group y-values by their x category.
+
+        Scalar y-values are appended as single floats.
+        Array y-values (``np.ndarray``) are exploded into individual floats,
+        so that each element of the vector becomes a separate observation
+        in the violin (useful for per-parameter spectra like ESD).
+        """
+        groups: dict[str, list[float]] = {cat: [] for cat in categories}
+
+        for x_val, y_val in zip(x_values, y_values, strict=False):
+            if y_val is None:
+                continue
+            cat = str(x_val)
+            if isinstance(y_val, np.ndarray):
+                groups[cat].extend(y_val.ravel().tolist())
+            else:
+                groups[cat].append(float(y_val))
+
+        return groups
+
+    def _build_figure(self) -> go.Figure:
+        """Build the plotly figure with violin traces."""
+        fig = go.Figure()
+
+        if self._traces_data is None:
+            return fig
+
+        for trace_id, trace_data in self._traces_data.items():
+            category = trace_data["category"]
+            y_values = trace_data["y_values"]
+
+            if len(y_values) == 0:
+                continue
 
             fig.add_trace(
                 go.Violin(
-                    name=name,
-                    x=xs,
-                    y=ys,
+                    name=category,
+                    x=[category] * len(y_values),
+                    y=y_values,
                     points=self.points,
                     box_visible=self.box_visible,
                     meanline_visible=self.meanline_visible,
+                    width=0.5,
                     side=self.side,
                     bandwidth=self.bandwidth,
-                    line_color=line_color,
+                    meta={"trace_id": trace_id},
                 )
             )
 
-            if self.jitter and ys.size > 0:
-                rng = np.random.default_rng(self.jitter_seed)
-                j = rng.uniform(-self.jitter_width, self.jitter_width, size=ys.size)
-                if self.jitter_density_scale:
-                    j = density_scaled_jitter(y=ys, jitter=j)
+        # Set title
+        if self.title:
+            fig.update_layout(title=self.title)
+        else:
+            fig.update_layout(title=f"{self.y.field} by {self.x.field}")
 
-                marker: dict[str, Any] = dict(
-                    size=self.jitter_marker_size, opacity=self.jitter_opacity
+        categoryorder = self.x_categoryorder or "array"
+
+        if categoryorder == "array":
+            categoryarray = self.x_categoryarray or [
+                trace_data["category"]
+                for trace_data in sorted(
+                    self._traces_data.values(),
+                    key=lambda data: data["category_idx"],
                 )
-                if self.jitter_color_field is not None:
-                    cs = np.asarray(jitter_colors.get(name, []), dtype=np.float64)
-                    if cs.size == ys.size:
-                        marker["color"] = cs
-                        if use_coloraxis:
-                            marker["coloraxis"] = "coloraxis"
-                        else:
-                            marker["colorscale"] = self.jitter_colorscale
-                            if self.jitter_show_colorbar:
-                                marker["colorbar"] = dict(orientation="h")
+            ]
+        else:
+            categoryarray = None
 
-                if self.marker_by:
-                    mvs = marker_by_values.get(name, [])
-                    if len(mvs) == ys.size:
-                        marker["symbol"] = [
-                            color_mapper.get_symbol_for_value(
-                                self.marker_by, mv, all_marker_vals
-                            )
-                            for mv in mvs
-                        ]
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=xs + self.jitter_offset + j,
-                        y=ys,
-                        mode="markers",
-                        showlegend=False,
-                        marker=marker,
-                        meta=dict(trace_type=f"{name} jitter"),
-                    )
-                )
-
-        fig.update_xaxes(
-            title=self.group_by if self.x_title is None else self.x_title,
-            tickmode="array",
-            tickvals=list(range(len(names))),
-            ticktext=names,
-            range=[-1, max(1, len(names))],
+        half_span = max(0.5, abs(self.jitter_offset) + self.jitter_width + 0.05)
+        fig.update_layout(
+            xaxis=dict(
+                categoryorder=categoryorder,
+                categoryarray=categoryarray,
+                range=[-half_span, len(self._traces_data) - 1 + 0.5 * half_span],
+            )
         )
-        fig.update_yaxes(title=self.field if self.y_title is None else self.y_title)
 
-        fig.update_layout(title=self.title or f"{self.field} by {self.group_by}")
-        return apply_theme(fig, self.theme)
+        return fig
+
+    @staticmethod
+    def _pick_category_values(
+        x_values: list[Any],
+        y_values: list[Any],
+        category: str,
+        resolved: float | list[float] | None,
+    ) -> float | list[float] | None:
+        """Slice a resolved numeric value for a specific category.
+
+        If resolved is scalar or None — return as-is.
+        If resolved is a per-entry list — filter to entries matching this category.
+        """
+        if resolved is None or not isinstance(resolved, list):
+            return resolved
+        return [
+            val
+            for x_val, y_val, val in zip(x_values, y_values, resolved, strict=False)
+            if str(x_val) == category and y_val is not None
+        ]
+
+    @staticmethod
+    def _pick_category_scalar(
+        x_values: list[Any],
+        category: str,
+        resolved: str | list[str] | None,
+    ) -> str | None:
+        """Pick a single categorical value for a category (first match).
+
+        If resolved is scalar or None — return as-is.
+        If resolved is a per-entry list — return the first matching value.
+        """
+        if resolved is None or not isinstance(resolved, list):
+            return resolved
+        for x_val, val in zip(x_values, resolved, strict=False):
+            if str(x_val) == category:
+                return val
+        return None
+
+    @staticmethod
+    def _pick_category_color(
+        x_values: list[Any],
+        y_values: list[Any],
+        category: str,
+        resolved_color: ResolvedColor,
+    ) -> ResolvedColor:
+        """Build a per-category ResolvedColor from a global ResolvedColor."""
+        if resolved_color.values is not None:
+            filtered = [
+                c_val
+                for x_val, y_val, c_val in zip(
+                    x_values, y_values, resolved_color.values, strict=False
+                )
+                if str(x_val) == category and y_val is not None
+            ]
+            return ResolvedColor(values=filtered)
+
+        if resolved_color.color is not None:
+            if isinstance(resolved_color.color, list):
+                for x_val, color in zip(x_values, resolved_color.color, strict=False):
+                    if str(x_val) == category:
+                        return ResolvedColor(color=color)
+                return ResolvedColor()
+            return resolved_color
+
+        return resolved_color

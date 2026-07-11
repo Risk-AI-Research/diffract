@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from typing import TYPE_CHECKING, Any
 
 from dependency_injector.wiring import Provide, inject
@@ -14,6 +15,12 @@ from .registry import KernelRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# Registration manifest for the built-in kernels. Import side effects only
+# run once per process, but each fresh registry still needs the built-ins;
+# register_default_kernels replays this manifest into the target registry.
+_DEFAULT_KERNEL_SPECS: list[dict[str, Any]] = []
+_COLLECTING_DEFAULTS = False
 
 
 @inject
@@ -67,17 +74,20 @@ def kernel(
         final_require = require_fields or req_auto
         final_produce = produce_fields or (final_name,)
 
-        registry.register_kernel(
-            name=final_name,
-            require_fields=final_require,
-            produce_fields=final_produce,
-            implementation=func,
-            apply_level=apply_level,
-            execution_protocol=execution_protocol,
-            restrictions=restrictions,
-            config=cfg,
-            info=info or KernelInfo(),
-        )
+        spec: dict[str, Any] = {
+            "name": final_name,
+            "require_fields": final_require,
+            "produce_fields": final_produce,
+            "implementation": func,
+            "apply_level": apply_level,
+            "execution_protocol": execution_protocol,
+            "restrictions": restrictions,
+            "config": cfg,
+            "info": info or KernelInfo(),
+        }
+        registry.register_kernel(**spec)
+        if _COLLECTING_DEFAULTS:
+            _DEFAULT_KERNEL_SPECS.append(spec)
 
         return func
 
@@ -86,12 +96,30 @@ def kernel(
     return decorator(_func)
 
 
-def register_default_kernels() -> None:
-    """Import and register default kernels from the kernels subpackage.
+def register_default_kernels(registry: KernelRegistry | None = None) -> None:
+    """Register the built-in kernels, replaying them into ``registry``.
 
-    Dynamically imports the kernels submodule, which triggers registration
-    of all kernel functions decorated with @kernel in that module.
-    This is called during container initialization to populate the registry
-    with built-in kernel implementations.
+    The first call imports the kernels subpackage, which registers every
+    ``@kernel``-decorated function into the currently wired registry and
+    records a manifest of the built-ins. Because module imports are cached
+    per process, later calls replay that manifest into ``registry`` so a
+    freshly created registry also receives the built-in kernels.
+
+    Args:
+        registry: Target registry for the manifest replay. When None, only
+            the import side effects apply (first call in the process).
     """
-    importlib.import_module(".kernels", package=__package__)
+    global _COLLECTING_DEFAULTS  # noqa: PLW0603
+
+    module_name = f"{__package__}.kernels"
+    if module_name not in sys.modules:
+        _COLLECTING_DEFAULTS = True
+        try:
+            importlib.import_module(".kernels", package=__package__)
+        finally:
+            _COLLECTING_DEFAULTS = False
+
+    if registry is not None:
+        for spec in _DEFAULT_KERNEL_SPECS:
+            if not registry.has_kernel(spec["name"]):
+                registry.register_kernel(**spec)

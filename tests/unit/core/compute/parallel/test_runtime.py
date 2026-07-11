@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-from diffract.core.compute.parallel import runtime
+from diffract.core.parallel import get_thread_pool_calibration
 
 
 pytestmark = pytest.mark.unit
 
 
 def test_get_thread_pool_calibration_is_cached() -> None:
-    runtime.get_thread_pool_calibration.cache_clear()
+    get_thread_pool_calibration.cache_clear()
 
-    c1 = runtime.get_thread_pool_calibration(2)
-    c2 = runtime.get_thread_pool_calibration(2)
+    c1 = get_thread_pool_calibration(2)
+    c2 = get_thread_pool_calibration(2)
 
     assert c1 == c2
-    info = runtime.get_thread_pool_calibration.cache_info()
+    info = get_thread_pool_calibration.cache_info()
     assert info.hits >= 1
 

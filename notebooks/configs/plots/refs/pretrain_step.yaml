@@ -1,0 +1,24 @@
+# @package refs
+
+
+pretrain_step:
+    _target_: diffract.viz.data.FieldRef
+    field: pretrain_step
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: numeric
+        
+        
+pretrain_step_cat:
+    _target_: diffract.viz.data.FieldRef
+    field: pretrain_step
+    data_type:
+      _target_: diffract.viz.data.DataType.from_string
+      name: categorical
+    ordering:
+      _target_: diffract.viz.data.Ordering
+      mode: 
+        _target_: diffract.viz.data.OrderMode.from_string
+        name: numeric

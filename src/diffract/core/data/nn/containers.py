@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from dependency_injector import containers, providers
 
-from diffract.core.compute.parallel import ParallelContext
-from diffract.core.metadata.interface import IMetadataIndex
+from diffract.core.data.metadata.interface import IMetadataIndex
+from diffract.core.parallel import ParallelContext
 from diffract.core.storage.interface import IStorageManager
 from diffract.core.utils.build import build_with_defaults
 

@@ -1,0 +1,23 @@
+# @package templates
+
+
+defaults:
+  - ../plot.yaml
+  - _self_
+
+
+heatmap:
+    _target_: diffract.viz.plots.HeatmapPlot
+    x: ${refs.layer_cat}
+    y: ${refs.head_cat}
+    z: ${refs.metric}
+    
+    x_showticklabels: false
+    y_showticklabels: false
+    
+    show_text: false
+    text_format: ".2f"
+    text_font_size: 10
+    reverse_y: false
+    
+    heatmap_coloraxis_id: 1

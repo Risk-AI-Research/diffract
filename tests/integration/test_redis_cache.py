@@ -31,8 +31,11 @@ def cache() -> RedisLRUCacheManager:
         )
     except Exception as e:  # noqa: BLE001 - test environment dependent
         pytest.skip(f"Redis not available: {e}")
-    # Ensure clean state before each test
-    cache.clear()
+    # The manager caps the whole Redis instance at max_memory_mb, and
+    # clear() only removes this manager's own key prefix: leftovers from
+    # other fixtures and previous runs in the shared test db count toward
+    # the cap and starve the eviction test. Start from an empty db.
+    cache._redis.flushdb()
     yield cache
     cache.clear()
     cache.close()
@@ -125,6 +128,7 @@ def test_clear(cache: RedisLRUCacheManager) -> None:
 
 
 def test_ttl_expiration() -> None:
+    pytest.importorskip("redis")
     cache = RedisLRUCacheManager(
         host=REDIS_HOST,
         port=REDIS_PORT,

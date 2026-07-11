@@ -1,0 +1,42 @@
+# @package templates
+
+
+defaults:
+  - ../plot.yaml
+  - _self_
+
+
+box:
+  _target_: diffract.viz.plots.BoxPlot
+  x: ${refs.model}
+  y: null
+  boxpoints: false
+  box_width: 0.2
+  
+  # x axis
+  x_title: ""
+  x_showgrid: false
+  x_showticklabels: false
+  # x_tickmode: array
+  # x_tickvals: ${models_range}
+  # x_ticktext: ${models}
+  
+  # y axis
+  y_title: ""
+  y_showticklabels: false
+  
+  # marker
+  marker_size: 2
+  marker_color: ${refs.model}
+  
+  # jitter
+  jitter_enabled: true
+  jitter_width: 0.3
+  jitter_offset: -0.5
+  jitter_density_scale: true
+  jitter_seed: 42
+  jitter_color: ${refs.layer}
+  jitter_colorscale: portland
+  jitter_colorbar_title: "layer"
+  jitter_coloraxis_id: 1
+  
