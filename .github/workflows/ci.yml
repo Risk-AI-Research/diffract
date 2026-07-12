@@ -93,7 +93,7 @@ jobs:
         run: uv sync --python ${{ matrix.python-version }} --extra dev --extra viz --extra torch
 
       - name: Run pytest
-        run: uv run --python ${{ matrix.python-version }} --extra dev --extra viz --extra torch pytest -m "not integration" tests --cov=src/diffract --cov-report=term-missing
+        run: uv run --python ${{ matrix.python-version }} --extra dev --extra viz --extra torch pytest -m "not integration" tests README.md --cov=src/diffract --cov-report=term-missing
         env:
           PYTHONPATH: src
 
