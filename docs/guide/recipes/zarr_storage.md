@@ -5,8 +5,8 @@ cloud object stores (S3, GCS, Azure, HDFS) via `fsspec`.
 
 ## Installation
 
-The `zarr` extra bundles `s3fs`, so S3-compatible stores (AWS, VK Cloud, MinIO, etc.)
-work without additional packages. GCS and Azure need their fsspec drivers installed
+The `zarr` extra bundles `s3fs`, so S3-compatible stores (AWS, MinIO, and other
+S3-compatible endpoints) work without additional packages. GCS and Azure need their fsspec drivers installed
 separately:
 
 ```bash
@@ -99,32 +99,6 @@ Environment variables:
 export AWS_ACCESS_KEY_ID="AKIA..."
 export AWS_SECRET_ACCESS_KEY="..."
 export AWS_DEFAULT_REGION="us-east-1"
-```
-
-### VK Cloud Object Storage
-
-```ini
-[storage.zarr]
-store_url = "s3://${S3_BUCKET}/${S3_PREFIX}data"
-
-[storage.zarr.storage_options]
-key = "${AWS_ACCESS_KEY_ID}"
-secret = "${AWS_SECRET_ACCESS_KEY}"
-
-[storage.zarr.storage_options.client_kwargs]
-endpoint_url = "https://hb.ru-msk.vkcloud-storage.ru"
-region_name = "ru-msk"
-```
-
-`.env` file:
-
-```bash
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_DEFAULT_REGION=ru-msk
-S3_ENDPOINT_URL=https://hb.ru-msk.vkcloud-storage.ru
-S3_BUCKET=your-bucket
-S3_PREFIX=diffract/
 ```
 
 ### Google Cloud Storage

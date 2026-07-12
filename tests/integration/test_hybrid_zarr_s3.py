@@ -1,10 +1,10 @@
 """Integration tests: Hybrid storage (SQLite light + Zarr S3 heavy).
 
-Requires environment variables for VK Cloud S3:
+Requires environment variables for an S3-compatible store:
     AWS_ACCESS_KEY_ID - Access key ID
     AWS_SECRET_ACCESS_KEY - Secret access key
-    AWS_DEFAULT_REGION - Region (default: ru-msk)
-    S3_ENDPOINT_URL - Endpoint URL (default: https://hb.ru-msk.vkcloud-storage.ru)
+    AWS_DEFAULT_REGION - Region (default: us-east-1)
+    S3_ENDPOINT_URL - Endpoint URL (optional; defaults to AWS)
     S3_BUCKET - Bucket name (required)
     S3_PREFIX - Prefix within bucket (default: diffract/)
 
@@ -38,10 +38,8 @@ def _get_s3_config() -> dict[str, str] | None:
     return {
         "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
         "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
-        "region": os.getenv("AWS_DEFAULT_REGION", "ru-msk"),
-        "endpoint_url": os.getenv(
-            "S3_ENDPOINT_URL", "https://hb.ru-msk.vkcloud-storage.ru"
-        ),
+        "region": os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+        "endpoint_url": os.getenv("S3_ENDPOINT_URL"),
         "bucket": bucket,
         "prefix": os.getenv("S3_PREFIX", "diffract/"),
     }
