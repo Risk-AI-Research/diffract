@@ -23,7 +23,7 @@ dictionaries of NumPy weight matrices.
 
 ## 🚀 Quick Start
 
-Diffract requires Python 3.12. The core package installs without any deep
+Diffract requires Python 3.12 or newer. The core package installs without any deep
 learning framework; heavy dependencies are opt-in extras:
 
 ```bash
@@ -45,7 +45,7 @@ Further extras: `frameworks` (TensorFlow, Flax, ONNX), `pandas` / `polars`
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Clone and install (uv provisions Python 3.12 automatically)
+# Clone and install (uv provisions the right Python automatically)
 git clone https://github.com/Risk-AI-Research/diffract.git
 cd diffract
 uv sync --extra dev --extra torch
@@ -98,7 +98,7 @@ internal structure:
 
 <br>
 
-## 🔑 Key Features
+## Key Features
 
 - **Session-based API**: Simple `models.add`, `compute.apply`, and
   `results.export_metrics` workflow.
@@ -375,12 +375,14 @@ max_workers = 4
 
 ## 📚 Documentation
 
-The documentation site is sourced from `docs/` and built with Sphinx + MyST. Install the
-tooling via `uv sync --extra docs` and run `make docs` to render the HTML locally.
+The documentation is hosted at
+[risk-ai-research.github.io/diffract](https://risk-ai-research.github.io/diffract/).
+It is sourced from `docs/` and built with Sphinx + MyST; `uv sync --extra docs`
+and `make docs` render the HTML locally.
 
 <br>
 
-## 📝 Citation
+## Citation
 
 If you use Diffract or build on the paper, please cite:
 
@@ -396,14 +398,14 @@ If you use Diffract or build on the paper, please cite:
 
 <br>
 
-## ❤️ Contributions
+## Contributions
 
-Contributions are welcome! Fork the repo, create a feature branch, and submit a PR. Use
-`make lint` and `make test` to validate your changes.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development setup, the checks CI runs, and the design principles.
 
 <br>
 
-## 📄 License
+## License
 
 Licensed under the Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Risk AI
 Research.
