@@ -1,4 +1,5 @@
 UV := $(shell if [ -x ./.venv/bin/uv ]; then echo ./.venv/bin/uv; \
+PYTHON ?= 3.12
 	elif command -v uv >/dev/null 2>&1; then echo uv; \
 	else echo "python3 -m uv"; fi)
 .DEFAULT_GOAL := help
@@ -49,16 +50,16 @@ format: ## Format source via ruff
 	$(UV) run --extra dev ruff format src/diffract
 
 test: ## Run pytest with coverage
-	PYTHONPATH=src $(UV) run --python 3.12.12 --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars --extra zarr pytest tests README.md --cov=src/diffract --cov-report=term-missing --cov-report=html
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars --extra zarr pytest tests README.md --cov=src/diffract --cov-report=term-missing --cov-report=html
 
 test-light: ## Run unit tests only (no integration/stress)
-	PYTHONPATH=src $(UV) run --python 3.12.12 --extra dev --extra viz --extra torch --extra zarr pytest -m "not integration and not stress" tests README.md --cov=src/diffract --cov-report=term-missing
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra viz --extra torch --extra zarr pytest -m "not integration and not stress" tests README.md --cov=src/diffract --cov-report=term-missing
 
 test-integration: ## Run integration tests
-	PYTHONPATH=src $(UV) run --python 3.12.12 --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "integration and not stress" tests
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "integration and not stress" tests
 
 test-stress: ## Run stress tests (slow, resource-intensive)
-	PYTHONPATH=src $(UV) run --python 3.12.12 --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "stress" tests
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "stress" tests
 
 check: ## Run lint and mypy
 	$(MAKE) lint
