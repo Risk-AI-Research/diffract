@@ -22,7 +22,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from .containers import list_profiles
 from .core.data.nn.params.schema import ParameterType

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+### Changed
+
+- Python 3.13 is supported (`requires-python >=3.12`); CI tests on 3.12
+  and 3.13.
+
 ## 0.2.1
 
 First release published to PyPI as `diffract-core` (the import name stays
