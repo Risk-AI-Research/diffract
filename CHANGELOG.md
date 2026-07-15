@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.3.0
+
+Brings the spectral kernels into line with their mathematical definitions
+across scale, sign, and degenerate inputs, renames several metrics to name
+the quantity they compute, and publishes a generated metrics catalog on the
+docs site.
+
+### Breaking changes
+
+Several kernels are renamed so the field name states the quantity it computes:
+
+| 0.2.2                | 0.3.0                    |
+| -------------------- | ------------------------ |
+| `l1_norm`            | `nuclear_norm`           |
+| `prod_frob_norm`     | `log_prod_frob_norm`     |
+| `prod_spectral_norm` | `log_prod_spectral_norm` |
+| `rand_distance`      | `w1_rand_distance`       |
+
+- `nuclear_norm` is the sum of singular values (the Schatten-1 / nuclear
+  norm).
+- `log_prod_frob_norm` and `log_prod_spectral_norm` accumulate in the log
+  domain (the sum of the per-layer `log10` norms, i.e. the log of their
+  product), so they stay finite on models with hundreds of layers.
+- `w1_rand_distance` is the Wasserstein-1 (earth-mover) distance between a
+  layer's spectrum and its permutation null, divided by the mean eigenvalue:
+  the index is invariant to permutation and to rescaling of the weights.
+- `hard_rank` takes an `rtol` config (the relative tolerance on the largest
+  eigenvalue) in place of `threshold`, and counts eigenvalues above
+  `rtol * lambda_max`, so the count is invariant to rescaling the weights.
+- `weights_rand` takes only a `seed`; the `n_randomise_iterations` option is
+  removed (repeated uniform permutations are equivalent to a single one).
+- Singular-vector overlaps (`l_overlap`, `r_overlap`) are taken in absolute
+  value; the option to produce signed overlaps is removed. The agreement
+  metrics are therefore invariant to the arbitrary sign LAPACK assigns each
+  singular vector.
+
+Because these renames and value changes alter stored field names and outputs,
+erase the affected fields and recompute before comparing results across the
+boundary: `session.results.erase("<field>", ..., erase_dependent_also=True)`
+(or `erase_all=True`), then re-apply the kernels.
+
+### Added
+
+- A generated metrics catalog on the docs site: one page per category (norms,
+  ranks, spectral, heavy-tailed, RMT, alignment, model quality) with each
+  kernel's produced fields, display formula, apply level, required inputs, and
+  configuration, plus a references bibliography. The catalog is generated from
+  the kernel registry at build time and a kernel without a formula fails the
+  docs build, keeping it complete and in sync with the registry.
+- Property-based tests (Hypothesis, in the `dev` extra) covering norm, rank,
+  and spectral/ESD invariants: scale and permutation invariance, monotonicity,
+  and NaN propagation. Coverage measurement now includes the kernel modules.
+
+### Changed
+
+- `log_norm` and `log_spectral_norm` average `log10(||W||^2)` over the
+  measurable parameters, a monotone function of the norm.
+- `mp_ks` reports the two-sided Kolmogorov-Smirnov distance between the
+  empirical spectral density and the fitted Marchenko-Pastur law, with the
+  model CDF conditioned on the bulk window the sample occupies.
+- The Marchenko-Pastur bulk variance is estimated from the trace identity (the
+  bulk eigenvalue sum over the full dimension), so eigenvalues that extend
+  past the fitted bulk edge are excluded from the estimate and the fitted edge
+  stays non-negative.
+- The heavy-tailed concentration kernels (`pl_`, `tpl_`, `expon_`) and the RMT
+  spike counters propagate NaN: a NaN spectral edge or spectrum yields NaN.
+- Degenerate inputs propagate NaN: a NaN weight matrix yields all-NaN SVD
+  outputs, and isometric or zero-variance inputs produce NaN norms and fit
+  statistics.
+- `mp_presence` is clipped to `[0, 1]`; `pl_alpha_weighted` scales the
+  power-law exponent by `log10` of the largest eigenvalue.
+- The results namespace honors the profile's default export format when a call
+  does not name one; the `hybrid` and `sqlite` profiles default to the `dict`
+  format.
+
+### Fixed
+
+- The floating-point environment is saved and restored around taichi
+  initialization, so its flush-to-zero setting stays contained to taichi's own
+  execution and does not reach numpy or scipy elsewhere in the process.
+- The sqlite `:memory:` sentinel is treated as a mode rather than a filesystem
+  path during index resolution.
+
+### Security
+
+- Cache and storage values are serialized with a typed codec that handles the
+  supported value kinds explicitly and rejects the rest, avoiding
+  deserialization of untrusted data (CWE-502).
+
 ## 0.2.2
 
 ### Changed
