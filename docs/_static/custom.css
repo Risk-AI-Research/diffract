@@ -38,3 +38,19 @@ pre {
 .content table td {
   word-wrap: break-word;
 }
+
+/* Metric catalog: formulas can be wide, so let columns size to their content
+   and scroll horizontally within the content column instead of forcing fixed
+   widths (which overflow the math cells over neighbouring columns). */
+.content table.metrics-catalog {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  table-layout: auto;
+}
+
+.content table.metrics-catalog th,
+.content table.metrics-catalog td {
+  word-wrap: normal;
+  white-space: nowrap;
+}

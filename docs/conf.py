@@ -6,9 +6,12 @@ from importlib.metadata import PackageNotFoundError, version as get_version
 
 REPO_ROOT = os.path.abspath("..")
 SRC_ROOT = os.path.join(REPO_ROOT, "src")
+EXT_ROOT = os.path.join(REPO_ROOT, "docs", "_ext")
 
-# Add the src/ root so Sphinx autodoc can import the package for docstrings.
+# Add the src/ root so Sphinx autodoc can import the package for docstrings,
+# and docs/_ext so the local build extensions are importable by name.
 sys.path.insert(0, SRC_ROOT)
+sys.path.insert(0, EXT_ROOT)
 
 # Keep the documentation build output focused. The library supports many optional
 # backends and logs availability at import time; we silence those messages here.
@@ -33,10 +36,21 @@ extensions = [
     "sphinx_copybutton",
     "sphinx_design",
     "sphinxext.opengraph",
+    "sphinxcontrib.bibtex",
+    "metrics_table",
 ]
 
+bibtex_bibfiles = ["references.bib"]
+bibtex_default_style = "plain"
+bibtex_reference_style = "author_year"
+
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "**.ipynb_checkpoints"]
+exclude_patterns = [
+    "_build",
+    "**.ipynb_checkpoints",
+    # Generated fragment: included into catalog.md, never a standalone page.
+    "reference/metrics/_generated_table.md",
+]
 
 root_doc = "index"
 
@@ -53,7 +67,13 @@ html_theme_options = {
     "top_of_page_buttons": ["edit", "view"],
 }
 
-myst_enable_extensions = ["deflist", "colon_fence", "attrs_inline"]
+myst_enable_extensions = [
+    "deflist",
+    "colon_fence",
+    "attrs_inline",
+    "dollarmath",
+    "amsmath",
+]
 myst_heading_anchors = 2
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 
