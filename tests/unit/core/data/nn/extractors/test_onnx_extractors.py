@@ -50,4 +50,3 @@ def test_onnx_model_extractor_gemm_dense_only(
     got = p.get_field("weights")
     assert isinstance(got, np.ndarray)
     assert got.shape == (3, 4)
-

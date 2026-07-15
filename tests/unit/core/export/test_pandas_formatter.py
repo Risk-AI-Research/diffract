@@ -69,7 +69,7 @@ def test_pandas_formatter_empty_results_schema() -> None:
 
 def test_pandas_formatter_with_aggregates() -> None:
     """Test that aggregates are correctly formatted into DataFrame."""
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
 
     from diffract.core.export.formatters.pandas_formatter import PandasFormatter
     from diffract.core.export.interface import StructuredExportResult
@@ -104,7 +104,9 @@ def test_pandas_formatter_with_aggregates() -> None:
         },
     ]
 
-    export = formatter.format_results(param_results, aggregate_results, ("frob_norm", "l_overlap"))
+    export = formatter.format_results(
+        param_results, aggregate_results, ("frob_norm", "l_overlap")
+    )
     assert isinstance(export, StructuredExportResult)
 
     # Scalars should have frob_norm
@@ -128,7 +130,7 @@ def test_pandas_formatter_with_aggregates() -> None:
 
 def test_pandas_formatter_multiple_aggregates() -> None:
     """Test multiple distinct aggregates."""
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
 
     from diffract.core.export.formatters.pandas_formatter import PandasFormatter
 

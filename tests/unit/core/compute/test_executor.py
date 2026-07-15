@@ -4,29 +4,28 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from diffract.core.compute.exceptions import KernelExecutionError
+from diffract.core.compute.execution.aggregation import AggregationContext
+from diffract.core.compute.execution.enums import (
+    KernelApplyLevel,
+    KernelExecutionProtocol,
+)
+from diffract.core.compute.execution.executor import KernelExecutor
 from diffract.core.compute.execution.utils import (
     execute_kernel,
     marshal_kernel,
     unmarshal_kernel,
 )
-from diffract.core.compute.execution.aggregation import AggregationContext
-from diffract.core.compute.exceptions import KernelExecutionError
-from diffract.core.compute.execution.executor import KernelExecutor
-
-from diffract.core.compute.execution.enums import (
-    KernelApplyLevel,
-    KernelExecutionProtocol,
-)
 from diffract.core.compute.registry import KernelRegistry
+from diffract.core.data.nn.aggregates.repository import AggregateRepository
+from diffract.core.data.nn.params.interface import IParameterView
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
-from diffract.core.data.nn.params.schema import ParameterType
 from diffract.core.data.nn.params.repository import ParameterRepository
-from diffract.core.data.nn.params.interface import IParameterView
-from diffract.core.data.nn.aggregates.repository import AggregateRepository
+from diffract.core.data.nn.params.schema import ParameterType
 
+# ---------- utilities to build real-ish parameters without storage/cache ----------
 
-# ---------- utilities to build real-ish parameters without real storage/cache ----------
 
 class InMemoryStorage:
     def __init__(self) -> None:
@@ -66,7 +65,7 @@ class InMemoryStorage:
         self._data.pop(obj_uid, None)
 
     def list_fields(
-        self, obj_uid: str = None, *, table: str = "default"
+        self, obj_uid: str | None = None, *, table: str = "default"
     ) -> list[str]:
         if obj_uid is None:
             all_fields: set[str] = set()
@@ -118,7 +117,9 @@ class InMemoryCache:
     def list_uids(self, *, table: str = "default") -> list[str]:
         return list(self._data.keys())
 
-    def upsert(self, obj_uid: str, field_name: str, value: Any, *, table: str = "default") -> None:
+    def upsert(
+        self, obj_uid: str, field_name: str, value: Any, *, table: str = "default"
+    ) -> None:
         self._data.setdefault(obj_uid, {})[field_name] = value
 
 
@@ -247,12 +248,16 @@ class InMemoryMetadataIndex:
 
 def make_repository() -> ParameterRepository:
     metadata_index = InMemoryMetadataIndex()
-    return ParameterRepository.initialize(InMemoryStorage(), metadata_index, InMemoryCache())
+    return ParameterRepository.initialize(
+        InMemoryStorage(), metadata_index, InMemoryCache()
+    )
 
 
 def make_aggregate_repository() -> AggregateRepository:
     metadata_index = InMemoryMetadataIndex()
-    return AggregateRepository.initialize(InMemoryStorage(), metadata_index, InMemoryCache())
+    return AggregateRepository.initialize(
+        InMemoryStorage(), metadata_index, InMemoryCache()
+    )
 
 
 def make_params(
@@ -264,7 +269,9 @@ def make_params(
 
     proxies: list[ParameterDataProxy] = []
     for name, model_id, initial_fields in specs:
-        meta = ParameterMetadata(name=name, ptype=ParameterType.DENSE, model_id=model_id)
+        meta = ParameterMetadata(
+            name=name, ptype=ParameterType.DENSE, model_id=model_id
+        )
         proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo)
         if initial_fields:
             for k, v in initial_fields.items():
@@ -274,18 +281,22 @@ def make_params(
     return repo, proxies
 
 
-def make_view(specs: list[tuple[str, str, dict[str, Any] | None]]) -> tuple[IParameterView, list[ParameterDataProxy]]:
+def make_view(
+    specs: list[tuple[str, str, dict[str, Any] | None]],
+) -> tuple[IParameterView, list[ParameterDataProxy]]:
     repo, proxies = make_params(specs)
     return repo.create_view(), proxies
 
 
 # ----------------- fixtures -----------------
 
+
 @pytest.fixture
 def registry():
     # Avoid importing default kernels
     with patch("diffract.core.compute.decorator.register_default_kernels"):
         yield KernelRegistry()
+
 
 @pytest.fixture
 def aggregate_repo():
@@ -299,6 +310,7 @@ def executor(registry, aggregate_repo):
 
 # ----------------- AggregationContext tests -----------------
 
+
 def test_aggregation_context_suffix_and_field():
     ctx = AggregationContext(models=("m2", "m1"), parameters=("p2", "p1"))
     assert ctx.to_field_suffix() == "models[m1,m2]@params[p1,p2]"
@@ -306,6 +318,7 @@ def test_aggregation_context_suffix_and_field():
 
 
 # ----------------- parameter-level execution -----------------
+
 
 def test_parameter_level_execute_simple(executor, registry):
     # kernel: double(input) -> out
@@ -352,7 +365,9 @@ def test_parameter_level_skips_already_computed(executor, registry):
         config=registry._split_signature(impl)[1],
     )
 
-    params, proxies = make_view([("w", "m", {"input": 2, "double": 123})])  # already computed
+    params, proxies = make_view(
+        [("w", "m", {"input": 2, "double": 123})]
+    )  # already computed
     (p,) = proxies
     executor.execute("double", params)
     # value should remain untouched
@@ -361,10 +376,14 @@ def test_parameter_level_skips_already_computed(executor, registry):
 
 # ----------------- dependencies resolution path -----------------
 
+
 def test_execute_resolves_dependencies(executor, registry):
     # dep: base(x) -> y ; final: plus10(y) -> z
-    def base(x: int) -> int: return x + 1
-    def final(y: int) -> int: return y + 10
+    def base(x: int) -> int:
+        return x + 1
+
+    def final(y: int) -> int:
+        return y + 10
 
     registry.register_kernel(
         name="base",
@@ -389,7 +408,8 @@ def test_execute_resolves_dependencies(executor, registry):
 
     # Ensure resolve_dependencies returns chain (name-based)
     deps = registry.resolve_dependencies("final")
-    assert "base" in deps and "final" in deps
+    assert "base" in deps
+    assert "final" in deps
 
     params, proxies = make_view([("w", "m", {"in": 1})])
     (p,) = proxies
@@ -400,9 +420,11 @@ def test_execute_resolves_dependencies(executor, registry):
 
 # ----------------- aggregation: IN_MODEL -----------------
 
+
 def test_in_model_aggregation(executor, registry, aggregate_repo):
     # per-parameter kernel: value -> v
-    def value(x: int) -> int: return x
+    def value(x: int) -> int:
+        return x
 
     # in-model aggregate: log_mean(vs) -> agg
     def log_mean(vs: tuple[int, ...]) -> float:
@@ -431,7 +453,7 @@ def test_in_model_aggregation(executor, registry, aggregate_repo):
         config=registry._split_signature(log_mean)[1],
     )
 
-    params, proxies = make_view(
+    params, _ = make_view(
         [
             ("w1", "m1", {"x": 1}),
             ("w2", "m1", {"x": 3}),
@@ -448,21 +470,27 @@ def test_in_model_aggregation(executor, registry, aggregate_repo):
         context_models=("m1",),
         context_params=("w1", "w2"),
     )
-    assert agg1.get_field("value") == pytest.approx(float(np.mean(np.log(np.array([1, 3])))))
+    assert agg1.get_field("value") == pytest.approx(
+        float(np.mean(np.log(np.array([1, 3]))))
+    )
 
     agg2 = aggregate_repo.get_or_create(
         field_name="agg",
         context_models=("m2",),
         context_params=("w3",),
     )
-    assert agg2.get_field("value") == pytest.approx(float(np.mean(np.log(np.array([7])))))
+    assert agg2.get_field("value") == pytest.approx(
+        float(np.mean(np.log(np.array([7]))))
+    )
 
 
 # ----------------- aggregation: CROSS_MODEL -----------------
 
+
 def test_cross_model_aggregation(executor, registry, aggregate_repo):
     # per-parameter kernel: project -> score
-    def score(x: int) -> int: return x * 2
+    def score(x: int) -> int:
+        return x * 2
 
     # cross-model aggregate for same parameter name: sum(scores) -> total
     def sum_scores(vs: tuple[int, ...]) -> int:
@@ -490,7 +518,7 @@ def test_cross_model_aggregation(executor, registry, aggregate_repo):
         config=registry._split_signature(sum_scores)[1],
     )
 
-    params, proxies = make_view(
+    params, _ = make_view(
         [
             ("p", "m1", {"x": 2}),
             ("p", "m2", {"x": 4}),
@@ -517,10 +545,14 @@ def test_cross_model_aggregation(executor, registry, aggregate_repo):
     assert agg_q.get_field("value") == 8 * 2
 
 
-# ----------------- contextual fields depending on other contextual fields -----------------
+# ----------------- contextual fields depending on contextual fields -----------------
 
-def test_contextual_field_depends_on_parameter_field(executor, registry, aggregate_repo):
+
+def test_contextual_field_depends_on_parameter_field(
+    executor, registry, aggregate_repo
+):
     """Test IN_MODEL aggregation produces contextual field from parameter fields."""
+
     def param_value(x: int) -> int:
         return x * 2
 
@@ -549,7 +581,7 @@ def test_contextual_field_depends_on_parameter_field(executor, registry, aggrega
         config=registry._split_signature(agg_sum)[1],
     )
 
-    params, proxies = make_view(
+    params, _ = make_view(
         [
             ("w1", "m1", {"x": 1}),
             ("w2", "m1", {"x": 2}),
@@ -570,7 +602,9 @@ def test_contextual_field_depends_on_parameter_field(executor, registry, aggrega
     assert agg.get_field("value") == 12
 
 
-def test_contextual_field_depends_on_contextual_field(executor, registry, aggregate_repo):
+def test_contextual_field_depends_on_contextual_field(
+    executor, registry, aggregate_repo
+):
     """Test aggregation kernel that depends on another aggregation kernel's output.
 
     This tests the case where:
@@ -578,6 +612,7 @@ def test_contextual_field_depends_on_contextual_field(executor, registry, aggreg
     2. Second kernel: IN_MODEL aggregates to produce contextual field A
     3. Third kernel: IN_MODEL uses contextual field A to produce contextual field B
     """
+
     def param_score(x: int) -> int:
         return x
 
@@ -658,6 +693,7 @@ def test_chained_in_model_aggregations(executor, registry, aggregate_repo):
     1. First IN_MODEL kernel computes sum
     2. Second IN_MODEL kernel computes ratio using the sum (contextual field)
     """
+
     def param_value(x: int) -> int:
         return x
 
@@ -733,6 +769,7 @@ def test_chained_in_model_aggregations(executor, registry, aggregate_repo):
 
 def test_multiple_models_in_model_aggregation(executor, registry, aggregate_repo):
     """Test IN_MODEL aggregation with multiple models produces separate aggregates."""
+
     def param_value(x: int) -> int:
         return x * 2
 
@@ -792,8 +829,10 @@ def test_multiple_models_in_model_aggregation(executor, registry, aggregate_repo
 
 # ----------------- prefetch, chunking, and batching -----------------
 
+
 def test_prefetch_success_goes_batch(executor, registry):
-    def impl(a: int) -> int: return a + 1
+    def impl(a: int) -> int:
+        return a + 1
 
     registry.register_kernel(
         name="k",
@@ -810,6 +849,7 @@ def test_prefetch_success_goes_batch(executor, registry):
 
     # Spy on batch path via the parameter runner
     from diffract.core.compute.execution.parameter_runner import ParameterKernelRunner
+
     with patch.object(ParameterKernelRunner, "_execute_batch") as spy:
         executor._parameter_runner.run("k", view)
         spy.assert_called_once()
@@ -817,21 +857,28 @@ def test_prefetch_success_goes_batch(executor, registry):
 
 # ----------------- restrictions & error handling ----------------
 
+
 def test_execute_kernel_success_and_error():
-    def ok(x): return x + 1
+    def ok(x):
+        return x + 1
+
     assert execute_kernel("k", ok, (1,)) == 2
 
-    def boom(): raise ValueError("bad")
+    def boom():
+        raise ValueError("bad")
+
     with pytest.raises(KernelExecutionError):
         execute_kernel("k", boom, ())
 
 
 # ----------------- multiprocessing marshalling -----------------
 
+
 def test_marshal_unmarshal_closure_function_roundtrip():
     factor = 3
 
-    def mul(x): return x * factor
+    def mul(x):
+        return x * factor
 
     blob = marshal_kernel(mul)
     fn = unmarshal_kernel(blob)

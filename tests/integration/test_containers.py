@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
-from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+from diffract.containers import (
+    MainContainer,
+    WiringConfiguration,
+    create_main_container,
+)
 from diffract.core.cache.interface import ICacheManager
-from diffract.core.storage.interface import IStorageManager
-
-from diffract.core.compute.decorator import kernel
 from diffract.core.compute.exceptions import InconsistentWiring
+from diffract.core.storage.interface import IStorageManager
 
 pytestmark = pytest.mark.integration
 
@@ -43,7 +43,9 @@ class TestMainContainer:
         assert container.compute() is not None
         assert container.nn() is not None
 
-    def test_dependency_injection_between_containers(self, temp_config_file: Path) -> None:
+    def test_dependency_injection_between_containers(
+        self, temp_config_file: Path
+    ) -> None:
         """ModelParametersContainer receives actual callable dependencies."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage_path = Path(tmpdir) / "test_storage.h5"
@@ -55,8 +57,6 @@ class TestMainContainer:
 
             mp_container = container.nn()
 
-            # Ensure the dependency providers are wired and callable
-            # Accessing the provider returns a provider object; calling it returns instance
             storage_provider = mp_container.storage_manager
             cache_provider = mp_container.cache_manager
 
@@ -79,7 +79,7 @@ class TestMainContainer:
             container.compute_singleton.register_default_kernels()
         except InconsistentWiring:
             failed = True
-            
+
         assert failed
 
         WiringConfiguration.wire(container)
@@ -100,7 +100,9 @@ class TestMainContainer:
         # Compute defaults should resolve from config file
         assert container.config.compute.max_workers() == 2
 
-    def test_container_creation_with_ini_config(self, temp_ini_config_file: Path) -> None:
+    def test_container_creation_with_ini_config(
+        self, temp_ini_config_file: Path
+    ) -> None:
         """INI configuration file is loaded and applied to providers."""
         container = create_main_container(temp_ini_config_file)
 

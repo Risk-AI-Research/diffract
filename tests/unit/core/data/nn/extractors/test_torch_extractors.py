@@ -14,18 +14,20 @@ if not import_utils.is_available("torch"):
 
 nn = import_utils.require("torch.nn")
 
-from diffract.core.data.nn.extractors.base import (  # noqa: E402
+from diffract.core.data.nn.extractors.base import (
     ExtractorOverrides,
 )
-from diffract.core.data.nn.extractors.torch import (  # noqa: E402
+from diffract.core.data.nn.extractors.torch import (
     TorchModuleExtractor,
     TorchStateDictExtractor,
 )
-from diffract.core.data.nn.params.repository import ParameterRepository  # noqa: E402
-from diffract.core.data.nn.params.schema import ParameterType  # noqa: E402
+from diffract.core.data.nn.params.repository import ParameterRepository
+from diffract.core.data.nn.params.schema import ParameterType
 
 
-def test_torch_module_extractor_linear_only(storage_cache_metadata: tuple[object, object, object]) -> None:
+def test_torch_module_extractor_linear_only(
+    storage_cache_metadata: tuple[object, object, object],
+) -> None:
     storage, cache, metadata_index = storage_cache_metadata
     repo = ParameterRepository.initialize(storage, metadata_index, cache)
 
@@ -47,7 +49,9 @@ def test_torch_module_extractor_linear_only(storage_cache_metadata: tuple[object
         assert w.ndim == 2
 
 
-def test_torch_state_dict_extractor_dense(storage_cache_metadata: tuple[object, object, object]) -> None:
+def test_torch_state_dict_extractor_dense(
+    storage_cache_metadata: tuple[object, object, object],
+) -> None:
     storage, cache, metadata_index = storage_cache_metadata
     repo = ParameterRepository.initialize(storage, metadata_index, cache)
 
@@ -66,7 +70,9 @@ def test_torch_state_dict_extractor_dense(storage_cache_metadata: tuple[object, 
     assert w.shape == tuple(state["weight"].shape)
 
 
-def test_overrides_change_name_and_type(storage_cache_metadata: tuple[object, object, object]) -> None:
+def test_overrides_change_name_and_type(
+    storage_cache_metadata: tuple[object, object, object],
+) -> None:
     storage, cache, metadata_index = storage_cache_metadata
     repo = ParameterRepository.initialize(storage, metadata_index, cache)
 
@@ -94,7 +100,9 @@ def test_overrides_change_name_and_type(storage_cache_metadata: tuple[object, ob
     assert renamed[0].meta.ptype == ParameterType.DENSE
 
 
-def test_skip_unsupported_layers(storage_cache_metadata: tuple[object, object, object]) -> None:
+def test_skip_unsupported_layers(
+    storage_cache_metadata: tuple[object, object, object],
+) -> None:
     storage, cache, metadata_index = storage_cache_metadata
     repo = ParameterRepository.initialize(storage, metadata_index, cache)
 

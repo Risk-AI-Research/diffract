@@ -105,9 +105,11 @@ docs = [
     "sphinx-design >=0.6.0",
     "furo >=2024.8.0",
     "sphinxext-opengraph >=0.9.0",
+    "sphinxcontrib-bibtex >=2.6.0",
 ]
 dev = [
     "bandit[toml] >=1.7.5",
+    "hypothesis >=6.0.0",
     "interrogate >=1.7.0",
     "mypy >=1.10.1",
     "pandas >=2.1.0",
@@ -170,8 +172,10 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
     "ignore::PendingDeprecationWarning",
-    # taichi 1.7.x ships a docstring with an invalid escape sequence
-    "ignore::SyntaxWarning:taichi.tools.image",
+    # taichi 1.7.x ships a docstring with an invalid escape sequence; the
+    # compile-time warning is attributed to the importing frame rather than
+    # the module that carries it, so it is matched by message.
+    "ignore:invalid escape sequence:SyntaxWarning",
 ]
 log_cli = true
 log_cli_level = "INFO"

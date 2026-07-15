@@ -15,7 +15,7 @@ REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
 def test_session_add_model_and_compute_with_redis_hdf5(
     session_with_redis_hdf5,
 ) -> None:
-    """Full cycle: add model → compute → read results with Redis cache + HDF5 storage."""
+    """Add model, compute and read results with Redis cache + HDF5 storage."""
     torch = pytest.importorskip("torch")
     session = session_with_redis_hdf5
 
@@ -26,9 +26,7 @@ def test_session_add_model_and_compute_with_redis_hdf5(
     weights = np.arange(12, dtype=np.float32).reshape(3, 4)
 
     with session:
-        session.models.add(
-            {"layer.0.weight": torch.from_numpy(weights)}, model_id="m1"
-        )
+        session.models.add({"layer.0.weight": torch.from_numpy(weights)}, model_id="m1")
         session.compute.apply("w_sum")
         result = session.results.export_metrics("w_sum", export_format="dict")
 
@@ -45,9 +43,10 @@ def test_hdf5_swmr_with_redis_cache(redis_cache_manager, hdf5_storage_manager) -
     storage = hdf5_storage_manager
 
     # Populate data
+    rng = np.random.default_rng(0)
     num_objects = 50
     for i in range(num_objects):
-        arr = np.random.randn(100, 100).astype(np.float32)
+        arr = rng.standard_normal((100, 100)).astype(np.float32)
         storage.set_field(f"obj_{i}", "array", arr)
 
     def read_operation(thread_idx: int) -> np.ndarray:
@@ -84,7 +83,8 @@ def test_compression_and_cache_interaction(
     storage = hdf5_storage_manager
 
     # Create array
-    arr = np.random.randn(1000, 1000).astype(np.float32)
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((1000, 1000)).astype(np.float32)
     uid = "compressed_obj"
     field = "compressed_array"
 
@@ -149,11 +149,12 @@ def test_index_consistency_with_cache(
     storage = hdf5_storage_manager
 
     # Add multiple objects
+    rng = np.random.default_rng(0)
     uids = []
     for i in range(20):
         uid = f"obj_{i}"
         uids.append(uid)
-        arr = np.random.randn(50, 50).astype(np.float32)
+        arr = rng.standard_normal((50, 50)).astype(np.float32)
         storage.set_field(uid, "weights", arr)
         cache.set_field(uid, "weights", arr)
 
@@ -174,4 +175,3 @@ def test_index_consistency_with_cache(
     # Verify index updated
     listed_after = storage.list_objs()
     assert len(listed_after) < len(listed)
-

@@ -187,8 +187,16 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
     "PLR0913", # Too many arguments
     "PLR0915", # Too many statements
     "ARG001", # Unused function argument
+    "ARG002", # Unused method argument (fixtures, mock signatures)
+    "ARG005", # Unused lambda argument (stub implementations)
     "FBT001", # Boolean positional argument
     "PT011",  # pytest.raises() is too broad
+    "PLR2004", # Literal expectations are the substance of an assertion
+    "SLF001", # Tests exercise private members deliberately
+    "INP001", # Test directories are namespace packages by design
+    "PLC0415", # Imports inside tests control DI wiring order
+    "S108",   # /tmp only appears as literal data in config-parsing asserts
+    "S110",   # try/except/pass in teardown paths
 ]
 "notebooks/*" = [
     "D",      # Docstring requirements

@@ -2,8 +2,9 @@
 
 import os
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import pytest
 import rootutils
@@ -53,7 +54,7 @@ class InMemoryStorage:
         self._store.pop(obj_uid, None)
 
     def list_fields(
-        self, obj_uid: str = None, *, table: str = "default"
+        self, obj_uid: str | None = None, *, table: str = "default"
     ) -> list[str]:
         if obj_uid is None:
             all_fields: set[str] = set()
@@ -238,24 +239,26 @@ class InMemoryMetadataIndex:
         pass
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def storage_cache() -> tuple[InMemoryStorage, InMemoryCache]:
     return InMemoryStorage(), InMemoryCache()
 
 
-@pytest.fixture(scope="function")
-def storage_cache_metadata() -> tuple[InMemoryStorage, InMemoryCache, InMemoryMetadataIndex]:
+@pytest.fixture
+def storage_cache_metadata() -> tuple[
+    InMemoryStorage, InMemoryCache, InMemoryMetadataIndex
+]:
     return InMemoryStorage(), InMemoryCache(), InMemoryMetadataIndex()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def temp_dir() -> Generator[Path, None, None]:
     """Create a temporary directory for test files."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def temp_config_file(temp_dir: Path) -> Path:
     """Create a temporary configuration file."""
     config_file = temp_dir / "test_config.yaml"
@@ -315,7 +318,7 @@ nn:
     return config_file
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def temp_ini_config_file(temp_dir: Path) -> Path:
     """Create a temporary INI configuration file for container initialization."""
     config_file = temp_dir / "test_config.ini"
@@ -352,7 +355,7 @@ skip_not_implemented_types = true
     return config_file
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def sample_config() -> dict[str, Any]:
     """Sample configuration dictionary for testing."""
     return {
@@ -388,7 +391,7 @@ def sample_config() -> dict[str, Any]:
 # Integration test fixtures for storage and cache managers
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def redis_cache_manager() -> Generator:
     """Fixture for Redis cache manager with cleanup."""
     from diffract.core.cache.redis_manager import RedisLRUCacheManager
@@ -413,7 +416,7 @@ def redis_cache_manager() -> Generator:
         cache.close()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def sqlite_storage_manager(temp_dir: Path) -> Generator:
     """Fixture for SQLite storage manager."""
     from diffract.core.storage.sqlite_manager import SQLiteStorageManager
@@ -427,7 +430,7 @@ def sqlite_storage_manager(temp_dir: Path) -> Generator:
         storage.close()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def hdf5_storage_manager(temp_dir: Path) -> Generator:
     """Fixture for HDF5 storage manager."""
     from diffract.core.storage.hdf5_manager import HDF5StorageManager
@@ -440,7 +443,7 @@ def hdf5_storage_manager(temp_dir: Path) -> Generator:
         storage.close()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def hybrid_storage_manager(temp_dir: Path) -> Generator:
     """Fixture for Hybrid storage manager (SQLite + HDF5)."""
     from diffract.core.storage.hdf5_manager import HDF5StorageManager
@@ -467,10 +470,10 @@ def hybrid_storage_manager(temp_dir: Path) -> Generator:
         hybrid.close()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def session_with_redis_sqlite(temp_dir: Path) -> Generator:
     """Fixture for Session with Redis cache and SQLite storage."""
-    from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+    from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
     key_prefix = "diffract:test:session:redis_sqlite:"
@@ -513,16 +516,19 @@ skip_not_implemented_types = true
     # Clear Redis keys with the prefix before test
     try:
         import redis
+
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
         cursor = 0
         while True:
-            cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+            cursor, keys = redis_client.scan(
+                cursor=cursor, match=f"{key_prefix}*", count=1000
+            )
             if keys:
                 redis_client.delete(*keys)
             if cursor == 0:
                 break
         redis_client.close()
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: BLE001
         pass  # Redis not available, will be caught later
 
     try:
@@ -530,7 +536,7 @@ skip_not_implemented_types = true
         WiringConfiguration.wire(container)
         session = Session(container=container)
         yield session
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "Redis" in str(e) or "redis" in str(e).lower():
             pytest.skip(f"Redis not available: {e}")
         raise
@@ -538,23 +544,26 @@ skip_not_implemented_types = true
         # Clean up Redis keys after test
         try:
             import redis
+
             redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
             cursor = 0
             while True:
-                cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+                cursor, keys = redis_client.scan(
+                    cursor=cursor, match=f"{key_prefix}*", count=1000
+                )
                 if keys:
                     redis_client.delete(*keys)
                 if cursor == 0:
                     break
             redis_client.close()
-        except Exception:  # noqa: BLE001, S110
+        except Exception:  # noqa: BLE001
             pass
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def session_with_redis_hdf5(temp_dir: Path) -> Generator:
     """Fixture for Session with Redis cache and HDF5 storage."""
-    from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+    from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
     key_prefix = "diffract:test:session:redis_hdf5:"
@@ -598,16 +607,19 @@ skip_not_implemented_types = true
     # Clear Redis keys with the prefix before test
     try:
         import redis
+
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
         cursor = 0
         while True:
-            cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+            cursor, keys = redis_client.scan(
+                cursor=cursor, match=f"{key_prefix}*", count=1000
+            )
             if keys:
                 redis_client.delete(*keys)
             if cursor == 0:
                 break
         redis_client.close()
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: BLE001
         pass  # Redis not available, will be caught later
 
     try:
@@ -615,7 +627,7 @@ skip_not_implemented_types = true
         WiringConfiguration.wire(container)
         session = Session(container=container)
         yield session
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "Redis" in str(e) or "redis" in str(e).lower():
             pytest.skip(f"Redis not available: {e}")
         raise
@@ -623,23 +635,26 @@ skip_not_implemented_types = true
         # Clean up Redis keys after test
         try:
             import redis
+
             redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
             cursor = 0
             while True:
-                cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+                cursor, keys = redis_client.scan(
+                    cursor=cursor, match=f"{key_prefix}*", count=1000
+                )
                 if keys:
                     redis_client.delete(*keys)
                 if cursor == 0:
                     break
             redis_client.close()
-        except Exception:  # noqa: BLE001, S110
+        except Exception:  # noqa: BLE001
             pass
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def session_with_redis_hybrid(temp_dir: Path) -> Generator:
     """Fixture for Session with Redis cache and Hybrid storage."""
-    from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+    from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
     key_prefix = "diffract:test:session:redis_hybrid:"
@@ -691,16 +706,19 @@ skip_not_implemented_types = true
     # Clear Redis keys with the prefix before test
     try:
         import redis
+
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
         cursor = 0
         while True:
-            cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+            cursor, keys = redis_client.scan(
+                cursor=cursor, match=f"{key_prefix}*", count=1000
+            )
             if keys:
                 redis_client.delete(*keys)
             if cursor == 0:
                 break
         redis_client.close()
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: BLE001
         pass  # Redis not available, will be caught later
 
     try:
@@ -708,7 +726,7 @@ skip_not_implemented_types = true
         WiringConfiguration.wire(container)
         session = Session(container=container)
         yield session
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "Redis" in str(e) or "redis" in str(e).lower():
             pytest.skip(f"Redis not available: {e}")
         raise
@@ -716,14 +734,17 @@ skip_not_implemented_types = true
         # Clean up Redis keys after test
         try:
             import redis
+
             redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
             cursor = 0
             while True:
-                cursor, keys = redis_client.scan(cursor=cursor, match=f"{key_prefix}*", count=1000)
+                cursor, keys = redis_client.scan(
+                    cursor=cursor, match=f"{key_prefix}*", count=1000
+                )
                 if keys:
                     redis_client.delete(*keys)
                 if cursor == 0:
                     break
             redis_client.close()
-        except Exception:  # noqa: BLE001, S110
+        except Exception:  # noqa: BLE001
             pass

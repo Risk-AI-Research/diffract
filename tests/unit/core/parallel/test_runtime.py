@@ -6,7 +6,6 @@ import pytest
 
 from diffract.core.parallel import get_thread_pool_calibration
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -19,4 +18,3 @@ def test_get_thread_pool_calibration_is_cached() -> None:
     assert c1 == c2
     info = get_thread_pool_calibration.cache_info()
     assert info.hits >= 1
-

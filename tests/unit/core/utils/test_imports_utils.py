@@ -44,7 +44,9 @@ def test_requires_package_decorator() -> None:
 
     assert ok() == 1
 
-    @import_utils.requires_package("definitely_not_a_package_12345", fallback_return="fallback")
+    @import_utils.requires_package(
+        "definitely_not_a_package_12345", fallback_return="fallback"
+    )
     def returns_fallback() -> str:
         return "real"
 
@@ -56,4 +58,3 @@ def test_requires_package_decorator() -> None:
 
     with pytest.raises(import_utils.OptionalDependencyError, match="requires package"):
         raises()
-

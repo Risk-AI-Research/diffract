@@ -18,11 +18,11 @@ Reference: https://cloud.vk.com/docs/storage/s3/quick-start
 
 from __future__ import annotations
 
+import contextlib
 import os
-import tempfile
 import uuid
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import numpy as np
 import pytest
@@ -50,10 +50,10 @@ def _check_s3fs_available() -> bool:
     try:
         import s3fs  # noqa: F401
         import zarr  # noqa: F401
-
-        return True
     except ImportError:
         return False
+    else:
+        return True
 
 
 S3_CONFIG = _get_s3_config()
@@ -62,7 +62,7 @@ SKIP_REASON_NO_CONFIG = "S3_BUCKET environment variable not set"
 SKIP_REASON_NO_S3FS = "s3fs or zarr package not installed"
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def zarr_s3_storage_manager() -> Generator:
     """Fixture for Zarr storage manager using S3 backend."""
     if not S3_CONFIG:
@@ -97,13 +97,11 @@ def zarr_s3_storage_manager() -> Generator:
     try:
         yield storage
     finally:
-        try:
+        with contextlib.suppress(Exception):
             storage.clear()
-        except Exception:  # noqa: BLE001, S110
-            pass
         storage.close()
 
-        try:
+        with contextlib.suppress(Exception):
             import s3fs
 
             fs = s3fs.S3FileSystem(
@@ -116,11 +114,9 @@ def zarr_s3_storage_manager() -> Generator:
             )
             if fs.exists(store_url):
                 fs.rm(store_url, recursive=True)
-        except Exception:  # noqa: BLE001, S110
-            pass
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def hybrid_zarr_s3_storage_manager(temp_dir: Path) -> Generator:
     """Fixture for Hybrid storage manager (SQLite light + Zarr S3 heavy)."""
     if not S3_CONFIG:
@@ -168,13 +164,11 @@ def hybrid_zarr_s3_storage_manager(temp_dir: Path) -> Generator:
     try:
         yield hybrid
     finally:
-        try:
+        with contextlib.suppress(Exception):
             hybrid.clear()
-        except Exception:  # noqa: BLE001, S110
-            pass
         hybrid.close()
 
-        try:
+        with contextlib.suppress(Exception):
             import s3fs
 
             fs = s3fs.S3FileSystem(
@@ -187,8 +181,6 @@ def hybrid_zarr_s3_storage_manager(temp_dir: Path) -> Generator:
             )
             if fs.exists(store_url):
                 fs.rm(store_url, recursive=True)
-        except Exception:  # noqa: BLE001, S110
-            pass
 
 
 class TestZarrS3Basic:
@@ -208,7 +200,8 @@ class TestZarrS3Basic:
         """Test ndarray roundtrip to S3."""
         storage = zarr_s3_storage_manager
         uid = "s3_array_test"
-        arr = np.random.randn(100, 50).astype(np.float32)
+        rng = np.random.default_rng(0)
+        arr = rng.standard_normal((100, 50)).astype(np.float32)
 
         storage.set_field(uid, "weights", arr)
         got = storage.get_field(uid, "weights")

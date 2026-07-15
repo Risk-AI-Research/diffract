@@ -29,7 +29,7 @@ def test_list_available_metrics_verbose_names_producing_kernel(ram_container) ->
 def test_apply_unknown_field_suggests_close_match(ram_container) -> None:
     session = Session(container=ram_container)
 
-    with pytest.raises(KernelNotFoundError, match="Did you mean.*frob_norm"):
+    with pytest.raises(KernelNotFoundError, match=r"Did you mean.*frob_norm"):
         session.compute.apply("frobnorm")
 
 
@@ -43,5 +43,5 @@ def test_apply_unknown_field_points_to_metric_listing(ram_container) -> None:
 def test_configure_unknown_kernel_suggests_close_match(ram_container) -> None:
     session = Session(container=ram_container)
 
-    with pytest.raises(KernelNotFoundError, match="Did you mean.*hard_rank"):
+    with pytest.raises(KernelNotFoundError, match=r"Did you mean.*hard_rank"):
         session.compute.configure_kernel("hard_rankk", threshold=1e-6)

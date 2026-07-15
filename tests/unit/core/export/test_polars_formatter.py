@@ -7,7 +7,9 @@ import importlib
 import pytest
 
 
-def test_polars_formatter_does_not_require_pandas(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_polars_formatter_does_not_require_pandas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pl = pytest.importorskip("polars")
 
     real_import_module = importlib.import_module
@@ -68,7 +70,13 @@ def test_polars_formatter_empty_results_schema() -> None:
     assert isinstance(export, StructuredExportResult)
     assert isinstance(export.scalars, pl.DataFrame)
     assert export.scalars.height == 0
-    assert set(export.scalars.columns) == {"model_id", "parameter_name", "parameter_uid", "parameter_type", "mean"}
+    assert set(export.scalars.columns) == {
+        "model_id",
+        "parameter_name",
+        "parameter_uid",
+        "parameter_type",
+        "mean",
+    }
 
     assert isinstance(export.aggregates, pl.DataFrame)
     assert export.aggregates.height == 0
@@ -76,7 +84,7 @@ def test_polars_formatter_empty_results_schema() -> None:
 
 def test_polars_formatter_with_aggregates() -> None:
     """Test that aggregates are correctly formatted into DataFrame."""
-    pl = pytest.importorskip("polars")
+    pytest.importorskip("polars")
 
     from diffract.core.export.formatters.polars_formatter import PolarsFormatter
     from diffract.core.export.interface import StructuredExportResult
@@ -111,7 +119,9 @@ def test_polars_formatter_with_aggregates() -> None:
         },
     ]
 
-    export = formatter.format_results(param_results, aggregate_results, ("frob_norm", "l_overlap"))
+    export = formatter.format_results(
+        param_results, aggregate_results, ("frob_norm", "l_overlap")
+    )
     assert isinstance(export, StructuredExportResult)
 
     # Scalars should have frob_norm

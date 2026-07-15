@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generator
+from collections.abc import Generator
 
 import numpy as np
 import pytest
@@ -18,7 +18,7 @@ from diffract.core.data.nn.params.schema import ParameterType
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def simple_cache_manager() -> Generator:
     """Fixture for Simple cache manager."""
     from diffract.core.cache.simple_manager import SimpleLRUCacheManager
@@ -64,7 +64,8 @@ def test_simple_cache_hdf5(simple_cache_manager, hdf5_storage_manager) -> None:
 
     uid = "test_obj"
     field = "array"
-    arr = np.random.randn(100, 100).astype(np.float32)
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((100, 100)).astype(np.float32)
 
     # Store in HDF5
     storage.set_field(uid, field, arr)
@@ -109,7 +110,9 @@ def test_simple_cache_hybrid(simple_cache_manager, hybrid_storage_manager) -> No
     np.testing.assert_allclose(cached_large, large_array)
 
 
-def test_simple_cache_lru_eviction(simple_cache_manager, sqlite_storage_manager) -> None:
+def test_simple_cache_lru_eviction(
+    simple_cache_manager, sqlite_storage_manager
+) -> None:
     """Test Simple cache LRU eviction behavior."""
     cache = simple_cache_manager
     storage = sqlite_storage_manager
@@ -135,7 +138,7 @@ def test_simple_cache_session_workflow(
     temp_dir, simple_cache_manager, sqlite_storage_manager
 ) -> None:
     """Test Session workflow with Simple cache and SQLite storage."""
-    from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+    from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
     config_path = temp_dir / "config_simple_sqlite.ini"
@@ -176,7 +179,7 @@ skip_not_implemented_types = true
     def w_sum(w: np.ndarray) -> float:
         return float(np.sum(w))
 
-    _, cfg_dict = registry._split_signature(w_sum)  # noqa: SLF001
+    _, cfg_dict = registry._split_signature(w_sum)
     registry.register_kernel(
         name="w_sum",
         require_fields=("weights",),
@@ -197,9 +200,7 @@ skip_not_implemented_types = true
         model_id="m1",
     )
     weights = np.arange(6, dtype=np.float32).reshape(2, 3)
-    proxy = ParameterDataProxy.create_and_store(
-        meta=meta, repository=repo
-    )
+    proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo)
     proxy.set_field("weights", weights)
 
     session.compute.apply("w_sum")
@@ -207,4 +208,3 @@ skip_not_implemented_types = true
     result = session.results.export_metrics("w_sum", export_format="dict")
     assert meta.uid in result
     assert result[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
-

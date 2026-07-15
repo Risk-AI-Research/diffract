@@ -5,16 +5,16 @@ from __future__ import annotations
 import concurrent.futures
 import threading
 import time
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 import pytest
 
-from diffract.core.parallel import ParallelContext, calibrate_thread_pool_overhead
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository
 from diffract.core.data.nn.params.schema import ParameterType
+from diffract.core.parallel import ParallelContext, calibrate_thread_pool_overhead
 
 pytestmark = pytest.mark.unit
 
@@ -49,7 +49,7 @@ class ThreadSafeStorage:
         with self._threads_lock:
             return set(self._threads_by_method.get(method, set()))
 
-    def __enter__(self) -> ThreadSafeStorage:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -73,8 +73,8 @@ class ThreadSafeStorage:
         with self._lock:
             try:
                 return self._store[field_name][obj_uid]
-            except KeyError:
-                raise KeyError(f"Field {field_name} not found for {obj_uid}")
+            except KeyError as err:
+                raise KeyError(f"Field {field_name} not found for {obj_uid}") from err
 
     def has_field(
         self, obj_uid: str, field_name: str, *, table: str = "default"
@@ -148,7 +148,7 @@ class ThreadSafeCache:
         self._latency_s = latency_s
         self._threads: set[int] = set()
 
-    def __enter__(self) -> ThreadSafeCache:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -184,11 +184,13 @@ class ThreadSafeCache:
     def list_uids(self, *, table: str = "default") -> list[str]:
         with self._lock:
             uids = set()
-            for obj_uid, _ in self._cache.keys():
+            for obj_uid, _ in self._cache:
                 uids.add(obj_uid)
             return list(uids)
 
-    def upsert(self, obj_uid: str, field_name: str, value: Any, *, table: str = "default") -> None:
+    def upsert(
+        self, obj_uid: str, field_name: str, value: Any, *, table: str = "default"
+    ) -> None:
         self.set_field(obj_uid, field_name, value)
 
 
@@ -200,7 +202,7 @@ class ThreadSafeMetadataIndex:
         self._lock = threading.Lock()
         self._latency_s = latency_s
 
-    def __enter__(self) -> "ThreadSafeMetadataIndex":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -340,7 +342,11 @@ def thread_safe_managers():
 @pytest.fixture
 def slow_managers():
     """Managers with artificial latency to test parallelism."""
-    return ThreadSafeStorage(latency_s=0.01), ThreadSafeCache(latency_s=0.01), ThreadSafeMetadataIndex(latency_s=0.01)
+    return (
+        ThreadSafeStorage(latency_s=0.01),
+        ThreadSafeCache(latency_s=0.01),
+        ThreadSafeMetadataIndex(latency_s=0.01),
+    )
 
 
 @pytest.fixture
@@ -385,7 +391,9 @@ class TestListFieldsByUidConcurrent:
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         params = []
         for i in range(n_params):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             p = ParameterDataProxy.create_and_store(meta=meta, repository=collection)
             storage.set_field(p.meta.uid, "weights", np.ones((2, 2)))
             storage.set_field(p.meta.uid, "bias", np.ones((2,)))
@@ -461,7 +469,9 @@ class TestPrefetchFieldsConcurrent:
         params = []
         fields_by_uid = {}
         for i in range(n_params):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             p = ParameterDataProxy.create_and_store(meta=meta, repository=collection)
             storage.set_field(p.meta.uid, "weights", np.ones((2, 2)))
             storage.set_field(p.meta.uid, "bias", np.ones((2,)))
@@ -538,7 +548,9 @@ class TestFilterByFieldsConcurrent:
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         params = []
         for i in range(n_params):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             p = ParameterDataProxy.create_and_store(meta=meta, repository=collection)
             # Only half have the 'weights' field
             if i % 2 == 0:
@@ -546,7 +558,9 @@ class TestFilterByFieldsConcurrent:
             params.append(p)
 
         storage.reset_thread_ids()
-        filtered = collection.create_view().filter_by_fields("weights", parallel=parallel_4)
+        filtered = collection.create_view().filter_by_fields(
+            "weights", parallel=parallel_4
+        )
 
         assert len(filtered) == n_params // 2
 
@@ -558,7 +572,9 @@ class TestFilterByFieldsConcurrent:
 
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         for i in range(3):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             ParameterDataProxy.create_and_store(meta=meta, repository=collection)
 
         filtered = collection.create_view().filter_by_fields()
@@ -575,9 +591,11 @@ class TestFilterByFieldsConcurrent:
         p2 = ParameterDataProxy.create_and_store(meta=meta2, repository=collection)
         storage.set_field(p1.meta.uid, "weights", np.ones((2, 2)))
 
-        filtered = collection.create_view().filter_by_fields("weights", inverse_mask=True)
+        filtered = collection.create_view().filter_by_fields(
+            "weights", inverse_mask=True
+        )
         assert len(filtered) == 1
-        assert list(filtered)[0].meta.uid == p2.meta.uid
+        assert next(iter(filtered)).meta.uid == p2.meta.uid
 
 
 class TestPrefetchFieldsAllConcurrent:
@@ -593,7 +611,9 @@ class TestPrefetchFieldsAllConcurrent:
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         params = []
         for i in range(n_params):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             p = ParameterDataProxy.create_and_store(meta=meta, repository=collection)
             storage.set_field(p.meta.uid, "weights", np.ones((2, 2)))
             params.append(p)
@@ -623,7 +643,9 @@ class TestPrefetchFieldsAllConcurrent:
         storage.set_field(p1.meta.uid, "weights", np.ones((2, 2)))
         # p2 doesn't have weights
 
-        ok = collection.create_view().prefetch_fields(fields=["weights"], verify_prefetch=True)
+        ok = collection.create_view().prefetch_fields(
+            fields=["weights"], verify_prefetch=True
+        )
         assert ok is False
 
 
@@ -638,10 +660,14 @@ class TestIterChunksByReadBudget:
         required_by_uid = {}
         params = []
         for i in range(5):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             p = ParameterDataProxy.create_and_store(meta=meta, repository=collection)
             # Each param has 100 float32 values = 400 bytes
-            storage.set_field(p.meta.uid, "weights", np.ones((10, 10), dtype=np.float32))
+            storage.set_field(
+                p.meta.uid, "weights", np.ones((10, 10), dtype=np.float32)
+            )
             required_by_uid[p.meta.uid] = ["weights"]
             params.append(p)
 
@@ -677,15 +703,15 @@ class TestIterChunksByReadBudget:
 
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         for i in range(3):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             ParameterDataProxy.create_and_store(meta=meta, repository=collection)
 
         view = collection.create_view()
 
         chunks = list(
-            view.iter_chunks_by_read_budget(
-                budget_bytes=0, required_fields_by_uid={}
-            )
+            view.iter_chunks_by_read_budget(budget_bytes=0, required_fields_by_uid={})
         )
         assert len(chunks) == 1
         assert len(chunks[0]) == 3
@@ -703,12 +729,14 @@ class TestLoadFromStorageConcurrent:
         collection = ParameterRepository.initialize(storage, metadata_index, cache)
         start = time.perf_counter()
         for i in range(n_params):
-            meta = ParameterMetadata(name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1")
+            meta = ParameterMetadata(
+                name=f"p{i}", ptype=ParameterType.DENSE, model_id="m1"
+            )
             ParameterDataProxy.create_and_store(meta=meta, repository=collection)
         creation_time = time.perf_counter() - start
 
         assert len(collection) == n_params
-        # Should be reasonably fast even with latency since we're not doing extra lookups
+        # Creation performs no extra lookups, so latency stays bounded
         assert creation_time < n_params * 0.05
 
     def test_handles_params_correctly(self, thread_safe_managers: tuple) -> None:
@@ -721,5 +749,4 @@ class TestLoadFromStorageConcurrent:
         ParameterDataProxy.create_and_store(meta=meta1, repository=collection)
 
         assert len(collection) == 1
-        assert list(collection)[0].meta.uid == meta1.uid
-
+        assert next(iter(collection)).meta.uid == meta1.uid

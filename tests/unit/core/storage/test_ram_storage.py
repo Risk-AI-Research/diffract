@@ -1,4 +1,5 @@
 """Tests for RAMStorageManager."""
+
 from __future__ import annotations
 
 import pytest
@@ -86,4 +87,3 @@ def test_context_manager_returns_self() -> None:
         assert isinstance(mgr, RAMStorageManager)
         mgr.set_field("ctx", "f", 1)
         assert mgr.get_field("ctx", "f") == 1
-
