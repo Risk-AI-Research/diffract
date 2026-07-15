@@ -7,7 +7,7 @@ LRU eviction and configurable memory limits.
 Features:
     - RAM-only storage with LRU eviction
     - Configurable memory limits and TTL
-    - Pickle serialization for arbitrary Python objects
+    - Safe typed serialization via the shared storage codec
     - Connection pooling and error handling
     - Health monitoring and memory usage tracking
 
@@ -21,16 +21,40 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import pickle
 from types import TracebackType
 from typing import Any, Self
 
 import diffract.core.utils.imports as import_utils
+from diffract.core.storage.serialization import decode_value, encode_value
 from diffract.core.utils.exceptions import format_exception_message
 
 from .interface import UID, ICacheManager
 
 logger = logging.getLogger(__name__)
+
+_TAG_HEADER_BYTES = 1
+_DECODE_MISS_ERRORS = (
+    ValueError,
+    EOFError,
+    OSError,
+    IndexError,
+    UnicodeDecodeError,
+)
+
+
+def _frame(payload: bytes, tag: str) -> bytes:
+    """Prefix a codec payload with its tag so the tag survives the round trip."""
+    tag_bytes = tag.encode("utf-8")
+    return bytes((len(tag_bytes),)) + tag_bytes + payload
+
+
+def _unframe(data: bytes) -> tuple[bytes, str]:
+    """Split a framed blob back into its codec payload and tag."""
+    tag_len = data[0]
+    tag = data[_TAG_HEADER_BYTES : _TAG_HEADER_BYTES + tag_len].decode("utf-8")
+    payload = data[_TAG_HEADER_BYTES + tag_len :]
+    return payload, tag
+
 
 if not import_utils.is_available("redis"):
     logger.debug("Redis not available, disabling Redis cache manager")
@@ -61,7 +85,7 @@ else:
 
         The manager configures Redis for RAM-only operation by disabling
         RDB snapshots and AOF logging, focusing on speed over durability.
-        All cached objects are serialized using pickle.
+        Cached values are serialized through the shared storage codec.
 
         Attributes:
             _key_prefix: Prefix for all Redis keys to avoid collisions.
@@ -213,17 +237,9 @@ else:
                 if data is None:
                     return None
                 try:
-                    return pickle.loads(data)  # noqa: S301
-                except (
-                    ModuleNotFoundError,
-                    ImportError,
-                    AttributeError,
-                    ValueError,
-                    pickle.UnpicklingError,
-                    EOFError,
-                ):
-                    # Cache may contain pickles produced by a different Python/numpy
-                    # version. Treat as a cache miss and delete the corrupted entry.
+                    payload, tag = _unframe(data)
+                    return decode_value(payload, tag)
+                except _DECODE_MISS_ERRORS:
                     with contextlib.suppress(RedisError):
                         self._redis.delete(key)
                     return None
@@ -287,19 +303,21 @@ else:
             Args:
                 obj_uid: Unique identifier for the cached object.
                 field_name: Name of the field to store.
-                value: Value to cache (must be pickle-serializable).
+                value: Value to cache. Supported kinds are NumPy arrays,
+                    ``bytes``, and JSON-serializable values.
 
             Raises:
+                ValueError: If the value is not a supported kind.
                 RedisError: If storage operation fails.
             """
+            blob = _frame(*encode_value(value))
             try:
                 key = self._make_key(obj_uid, field_name)
-                payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
 
                 if self._ttl_seconds is not None:
-                    self._redis.setex(key, self._ttl_seconds, payload)
+                    self._redis.setex(key, self._ttl_seconds, blob)
                 else:
-                    self._redis.set(key, payload)
+                    self._redis.set(key, blob)
 
             except RedisError:
                 logger.exception("Redis set_field error")

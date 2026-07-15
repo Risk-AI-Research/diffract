@@ -12,7 +12,7 @@ from diffract.core.cache.simple_manager import SimpleLRUCacheManager
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def cache() -> SimpleLRUCacheManager:
     c = SimpleLRUCacheManager(
         max_memory_mb=4, ttl_seconds=None, key_prefix="diffract:test:cache:"
@@ -48,7 +48,7 @@ def test_numpy_array_roundtrip(cache: SimpleLRUCacheManager):
     uid = "obj-3"
     field = "weights"
 
-    arr = np.random.randn(128, 64).astype(np.float32)
+    arr = np.random.default_rng(0).standard_normal((128, 64)).astype(np.float32)
     cache.set_field(uid, field, arr)
 
     got = cache.get_field(uid, field)
@@ -118,7 +118,7 @@ def test_ttl_expiration():
 def test_lru_eviction(cache: SimpleLRUCacheManager):
     # Fill cache with multiple small entries to exceed 4MB limit
     # Each value ~64KB
-    value = np.random.bytes(64 * 1024)
+    value = np.random.default_rng(0).bytes(64 * 1024)
     for i in range(200):
         cache.set_field(f"obj{i}", "v", value)
 

@@ -1,5 +1,4 @@
-import os
-import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,9 +7,8 @@ from diffract.core.storage.hdf5_manager import HDF5StorageManager
 
 
 @pytest.fixture
-def h5tmp() -> str:
-    with tempfile.TemporaryDirectory() as d:
-        yield os.path.join(d, "store.h5")
+def h5tmp(temp_dir: Path) -> str:
+    return str(temp_dir / "store.h5")
 
 
 @pytest.fixture
@@ -49,7 +47,7 @@ def test_set_get_scalar_roundtrip(storage: HDF5StorageManager) -> None:
 def test_set_get_ndarray_roundtrip(storage: HDF5StorageManager) -> None:
     uid = "u2"
     field = "weights"
-    arr = np.random.randn(64, 32).astype(np.float32)
+    arr = np.random.default_rng(0).standard_normal((64, 32)).astype(np.float32)
 
     storage.set_field(uid, field, arr)
     got = storage.get_field(uid, field)
@@ -121,7 +119,9 @@ def test_list_objs_has_field(storage: HDF5StorageManager) -> None:
     assert "x3" not in objs
 
 
-def test_erase_field_removes_object_when_last_field(storage: HDF5StorageManager) -> None:
+def test_erase_field_removes_object_when_last_field(
+    storage: HDF5StorageManager,
+) -> None:
     uid = "z1"
     storage.set_field(uid, "t", 1)
     assert uid in storage.list_objs()
@@ -143,7 +143,9 @@ def test_erase_obj_removes_all_fields_and_index(storage: HDF5StorageManager) -> 
     assert uid not in storage.list_objs()
 
 
-def test_erase_field_for_all_updates_index_when_verify_enabled(storage: HDF5StorageManager) -> None:
+def test_erase_field_for_all_updates_index_when_verify_enabled(
+    storage: HDF5StorageManager,
+) -> None:
     # q1/q2 only have 'dead'; q3 has 'alive' only.
     storage.set_field("q1", "dead", 1)
     storage.set_field("q2", "dead", 2)
@@ -211,8 +213,9 @@ def test_nested_batch_context_operations_queued(storage: HDF5StorageManager) -> 
         storage.set_field(uid, "a", 1)
         with storage:  # Nested context
             storage.set_field(uid, "b", 2)
-            # Note: In HDF5, calling has_field/get_field inside batch context
-            # triggers _perform_batch_operations(), so operations become visible immediately
+            # Note: In HDF5, calling has_field/get_field inside a batch context
+            # triggers _perform_batch_operations(), so operations become visible
+            # immediately.
             assert storage.has_field(uid, "a")  # This flushes operations
             assert storage.has_field(uid, "b")
         storage.set_field(uid, "c", 3)

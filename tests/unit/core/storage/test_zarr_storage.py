@@ -1,5 +1,4 @@
-import os
-import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,9 +9,8 @@ from diffract.core.storage.zarr_manager import ZarrStorageManager
 
 
 @pytest.fixture
-def zarr_store_dir() -> str:
-    with tempfile.TemporaryDirectory() as d:
-        yield os.path.join(d, "zarr_store")
+def zarr_store_dir(temp_dir: Path) -> str:
+    return str(temp_dir / "zarr_store")
 
 
 @pytest.fixture
@@ -34,10 +32,19 @@ def test_set_get_json_roundtrip(storage: ZarrStorageManager) -> None:
     assert storage.get_field(uid, "__metadata__") == meta
 
 
-def test_set_get_pickle_fallback(storage: ZarrStorageManager) -> None:
-    uid = "u_pickle"
+def test_set_non_serializable_value_raises(storage: ZarrStorageManager) -> None:
+    uid = "u_bad"
     field = "v"
     value = {1, 2, 3}
+
+    with pytest.raises(ValueError, match="cannot serialize"):
+        storage.set_field(uid, field, value)
+
+
+def test_set_get_bytes_roundtrip(storage: ZarrStorageManager) -> None:
+    uid = "u_bytes"
+    field = "v"
+    value = b"\x00\x01binary\xfe\xff"
 
     storage.set_field(uid, field, value)
     assert storage.get_field(uid, field) == value
@@ -46,7 +53,7 @@ def test_set_get_pickle_fallback(storage: ZarrStorageManager) -> None:
 def test_set_get_ndarray_roundtrip(storage: ZarrStorageManager) -> None:
     uid = "u2"
     field = "weights"
-    arr = np.random.randn(64, 32).astype(np.float32)
+    arr = np.random.default_rng(0).standard_normal((64, 32)).astype(np.float32)
 
     storage.set_field(uid, field, arr)
     got = storage.get_field(uid, field)
@@ -104,7 +111,9 @@ def test_registry_integrity_after_erase(storage: ZarrStorageManager) -> None:
     assert "b" not in storage.list_objs()
 
 
-def test_erase_field_removes_object_when_last_field(storage: ZarrStorageManager) -> None:
+def test_erase_field_removes_object_when_last_field(
+    storage: ZarrStorageManager,
+) -> None:
     uid = "z1"
     storage.set_field(uid, "t", 1)
     assert uid in storage.list_objs()
@@ -162,7 +171,9 @@ def test_nested_batch_contexts(storage: ZarrStorageManager) -> None:
     assert storage.get_field(uid, "d") == 4
 
 
-def test_read_inside_batch_context_flushes_pending_ops(storage: ZarrStorageManager) -> None:
+def test_read_inside_batch_context_flushes_pending_ops(
+    storage: ZarrStorageManager,
+) -> None:
     uid = "u_read_flush"
     with storage:
         storage.set_field(uid, "a", 1)
