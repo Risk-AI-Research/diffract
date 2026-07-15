@@ -31,6 +31,10 @@ _DEFAULT_MAX_SQL_VARIABLES = 999
 _SQL_VARIABLE_SAFETY_MARGIN = 32
 _DEFAULT_IN_TEMP_TABLE_THRESHOLD = 512
 
+# SQLite sentinel selecting an in-memory database. Not a filesystem path, so
+# configuration path resolution carries it verbatim.
+IN_MEMORY_DATABASE = ":memory:"
+
 
 class SQLiteMetadataIndex:
     """SQLite-based metadata index with optimized querying.
@@ -78,11 +82,11 @@ class SQLiteMetadataIndex:
         self._in_temp_table_threshold = max(1, threshold)
 
         # Ensure parent directory exists (skip for in-memory databases)
-        if ":memory:" not in path:
+        if path == IN_MEMORY_DATABASE:
+            self._close_in_destructor_only = True
+        else:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             self._close_in_destructor_only = False
-        else:
-            self._close_in_destructor_only = True
         self._in_destructor = False
 
     def connect(self) -> None:
@@ -91,7 +95,7 @@ class SQLiteMetadataIndex:
             return
 
         self._conn = sqlite3.connect(
-            self._path if ":memory:" not in self._path else ":memory:",
+            self._path,
             check_same_thread=False,
             timeout=self._timeout,
             isolation_level=None,
@@ -209,7 +213,8 @@ class SQLiteMetadataIndex:
         cur.execute(f"CREATE TEMP TABLE {table_name} (value)")
         deduplicated = self._deduplicate_values(values)
         cur.executemany(
-            f"INSERT INTO {table_name} (value) VALUES (?)",
+            f"INSERT INTO {table_name} "  # nosec B608 - name from _next_temp_table_name
+            "(value) VALUES (?)",
             ((value,) for value in deduplicated),
         )
         cur.execute(f"CREATE INDEX {index_name} ON {table_name}(value)")
@@ -227,7 +232,8 @@ class SQLiteMetadataIndex:
         index_name = f"{table_name}_value_idx"
         cur.execute(f"CREATE TEMP TABLE {table_name} (seq INTEGER PRIMARY KEY, value)")
         cur.executemany(
-            f"INSERT INTO {table_name} (seq, value) VALUES (?, ?)",
+            f"INSERT INTO {table_name} "  # nosec B608 - name from _next_temp_table_name
+            "(seq, value) VALUES (?, ?)",
             ((i, value) for i, value in enumerate(values)),
         )
         cur.execute(f"CREATE INDEX {index_name} ON {table_name}(value)")
@@ -301,7 +307,10 @@ class SQLiteMetadataIndex:
         col_values.append(json.dumps(json_extra) if json_extra else None)
 
         placeholders = ", ".join("?" * len(col_names))
-        sql = f"INSERT INTO {table} ({', '.join(col_names)}) VALUES ({placeholders})"
+        sql = (
+            f"INSERT INTO {table} "  # nosec B608 - table constant; schema columns
+            f"({', '.join(col_names)}) VALUES ({placeholders})"
+        )
 
         with self._lock, closing(self._conn.cursor()) as cur:
             cur.execute(sql, col_values)
@@ -323,7 +332,10 @@ class SQLiteMetadataIndex:
             return
 
         values.append(uid)
-        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE uid = ?"
+        sql = (
+            f"UPDATE {table} "  # nosec B608 - table constant; schema columns
+            f"SET {', '.join(set_parts)} WHERE uid = ?"
+        )
 
         with self._lock, closing(self._conn.cursor()) as cur:
             cur.execute(sql, values)
@@ -361,7 +373,11 @@ class SQLiteMetadataIndex:
         self._ensure_connected()
 
         with closing(self._conn.cursor()) as cur:
-            cur.execute(f"SELECT * FROM {table} WHERE uid = ?", (uid,))
+            cur.execute(
+                f"SELECT * FROM {table} "  # nosec B608 - table is a repository constant
+                "WHERE uid = ?",
+                (uid,),
+            )
             row = cur.fetchone()
             if row is None:
                 return None
@@ -377,7 +393,10 @@ class SQLiteMetadataIndex:
         with self._lock, closing(self._conn.cursor()) as cur:
             if self._can_inline_values(len(uids)):
                 placeholders = ", ".join("?" * len(uids))
-                sql = f"SELECT * FROM {table} WHERE uid IN ({placeholders})"
+                sql = (
+                    f"SELECT * FROM {table} "  # nosec B608 - table is a repo constant
+                    f"WHERE uid IN ({placeholders})"
+                )
                 cur.execute(sql, uids)
                 rows = cur.fetchall()
 
@@ -395,7 +414,8 @@ class SQLiteMetadataIndex:
             )
             try:
                 cur.execute(
-                    f"SELECT f.seq, t.* FROM {tmp_table} AS f "
+                    f"SELECT f.seq, t.* "  # nosec B608 - repo constant + sanitized temp
+                    f"FROM {tmp_table} AS f "
                     f"LEFT JOIN {table} AS t ON t.uid = f.value "
                     "ORDER BY f.seq"
                 )
@@ -474,10 +494,16 @@ class SQLiteMetadataIndex:
                     if col == "uid":
                         continue
                     conditions.append(
-                        f"{table_alias}.{col} IN (SELECT value FROM {tmp_table})"
+                        # col is a dict key set by diffract call sites (constant
+                        # column names); user data is the bound values, not keys.
+                        f"{table_alias}.{col} "  # nosec B608
+                        f"IN (SELECT value FROM {tmp_table})"
                     )
 
-                sql = f"SELECT {table_alias}.uid FROM {from_clause}"
+                sql = (
+                    f"SELECT {table_alias}.uid "  # nosec B608 - constant table + alias
+                    f"FROM {from_clause}"
+                )
                 if conditions:
                     sql += f" WHERE {' AND '.join(conditions)}"
                 if order_by:
@@ -496,7 +522,11 @@ class SQLiteMetadataIndex:
         self._ensure_connected()
 
         with self._lock, closing(self._conn.cursor()) as cur:
-            cur.execute(f"DELETE FROM {table} WHERE uid = ?", (uid,))
+            cur.execute(
+                f"DELETE FROM {table} "  # nosec B608 - table is a repository constant
+                "WHERE uid = ?",
+                (uid,),
+            )
 
     def delete_batch(self, table: str, uids: list[str]) -> None:
         """Delete multiple records by uids."""
@@ -508,7 +538,10 @@ class SQLiteMetadataIndex:
         with self._lock, closing(self._conn.cursor()) as cur:
             if self._can_inline_values(len(uids)):
                 placeholders = ", ".join("?" * len(uids))
-                sql = f"DELETE FROM {table} WHERE uid IN ({placeholders})"
+                sql = (
+                    f"DELETE FROM {table} "  # nosec B608 - table is a repo constant
+                    f"WHERE uid IN ({placeholders})"
+                )
                 cur.execute(sql, uids)
                 return
 
@@ -518,7 +551,8 @@ class SQLiteMetadataIndex:
             )
             try:
                 cur.execute(
-                    f"DELETE FROM {table} WHERE uid IN (SELECT value FROM {tmp_table})"
+                    f"DELETE FROM {table}"  # nosec B608 - const table + sanitized temp
+                    f" WHERE uid IN (SELECT value FROM {tmp_table})"
                 )
             finally:
                 self._drop_temp_table(cur, tmp_table)
@@ -535,7 +569,7 @@ class SQLiteMetadataIndex:
                 conditions.append(f"{col} = ?")
                 params.append(self._serialize_value(val))
 
-        sql = f"SELECT COUNT(*) FROM {table}"
+        sql = f"SELECT COUNT(*) FROM {table}"  # nosec B608 - table is a repo constant
         if conditions:
             sql += f" WHERE {' AND '.join(conditions)}"
 
@@ -548,7 +582,11 @@ class SQLiteMetadataIndex:
         self._ensure_connected()
 
         with closing(self._conn.cursor()) as cur:
-            cur.execute(f"SELECT DISTINCT {column} FROM {table}")
+            # table/column are caller-supplied identifiers, never user data; no
+            # diffract call site reaches this public-interface-only method.
+            cur.execute(
+                f"SELECT DISTINCT {column} FROM {table}"  # nosec B608
+            )
             return [row[0] for row in cur.fetchall()]
 
     def list_uids(self, table: str) -> list[str]:
@@ -556,7 +594,7 @@ class SQLiteMetadataIndex:
         self._ensure_connected()
 
         with closing(self._conn.cursor()) as cur:
-            cur.execute(f"SELECT uid FROM {table}")
+            cur.execute(f"SELECT uid FROM {table}")  # nosec B608 - repo table constant
             return [row[0] for row in cur.fetchall()]
 
     def clear(self, table: str | None = None) -> None:
@@ -570,9 +608,11 @@ class SQLiteMetadataIndex:
                 tables = [row[0] for row in cur.fetchall()]
                 for t in tables:
                     if not t.startswith("sqlite_"):
-                        cur.execute(f"DELETE FROM {t}")
+                        cur.execute(
+                            f"DELETE FROM {t}"  # nosec B608 - name from sqlite_master
+                        )
             else:
-                cur.execute(f"DELETE FROM {table}")
+                cur.execute(f"DELETE FROM {table}")  # nosec B608 - repo table constant
 
     def _serialize_value(self, value: Any) -> Any:
         """Serialize a value for storage."""

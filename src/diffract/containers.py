@@ -25,6 +25,7 @@ from .core.compute.containers import (
     ComputeSingletonContainerWiringConfig,
 )
 from .core.data.metadata.containers import MetadataContainer
+from .core.data.metadata.sqlite_index import IN_MEMORY_DATABASE
 from .core.data.nn.containers import ModelParametersContainer
 from .core.export.containers import ExportContainer
 from .core.parallel import ParallelSingletonContainer
@@ -41,6 +42,10 @@ PROFILES: dict[str, str] = {
     "local": "configs/sqlite.ini",
     "hybrid": "configs/hybrid.ini",
 }
+
+# Backend sentinels that occupy a "path" key without naming a file. They are
+# carried verbatim so a backend can recognize them by equality.
+_NON_FILESYSTEM_PATH_VALUES: frozenset[str] = frozenset({IN_MEMORY_DATABASE})
 
 
 def list_profiles() -> list[str]:
@@ -371,6 +376,8 @@ def create_main_container(
                 if k != key or not isinstance(v, str):
                     continue
                 value = v.strip().strip('"')
+                if value in _NON_FILESYSTEM_PATH_VALUES:
+                    continue
                 if value.startswith(("ext://", "/", "~")):
                     continue
                 cur[k] = str(base_path / value)

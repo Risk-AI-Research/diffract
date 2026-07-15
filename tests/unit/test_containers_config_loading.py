@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from diffract.containers import _coerce_ini_value, _parse_ini_config, create_main_container
+from diffract.containers import (
+    _coerce_ini_value,
+    _parse_ini_config,
+    create_main_container,
+)
+from diffract.core.data.metadata.sqlite_index import IN_MEMORY_DATABASE
 
 
 def test_coerce_ini_value_basic_types() -> None:
@@ -54,3 +59,24 @@ def test_create_main_container_unsupported_config_extension(temp_dir: Path) -> N
 
     with pytest.raises(ValueError, match="Unsupported config file extension"):
         create_main_container(cfg_path)
+
+
+def test_ram_profile_carries_the_in_memory_sentinel_verbatim() -> None:
+    """`:memory:` occupies a "path" key without naming a file, so path
+    resolution must leave it exactly as written. Rebasing it against a base
+    directory yields something that only behaves as an in-memory database for a
+    backend testing the sentinel by substring; an equality test would open a
+    file named ':memory:' on disk instead."""
+    container = create_main_container(profile="ram")
+
+    assert container.config()["metadata"]["sqlite"]["path"] == IN_MEMORY_DATABASE
+
+
+def test_relative_paths_resolve_against_the_base_directory() -> None:
+    """The sentinel exemption must not disable path resolution: an ordinary
+    relative path in a profile still becomes absolute."""
+    container = create_main_container(profile="local")
+
+    resolved = container.config()["metadata"]["sqlite"]["path"]
+    assert Path(resolved).is_absolute()
+    assert resolved.endswith("metadata_index.db")
