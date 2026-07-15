@@ -6,6 +6,8 @@ import pytest
 
 from diffract.session.field_cache import SessionFieldCache
 
+pytestmark = pytest.mark.unit
+
 
 class TestSessionFieldCacheBasic:
     """Basic functionality tests for SessionFieldCache."""

@@ -45,4 +45,3 @@ def test_tensorflow_model_extractor_dense_only(
         w = p.get_field("weights")
         assert isinstance(w, np.ndarray)
         assert w.ndim == 2
-

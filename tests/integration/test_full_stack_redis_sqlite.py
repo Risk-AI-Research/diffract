@@ -19,7 +19,7 @@ REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
 def test_session_add_model_and_compute_with_redis_sqlite(
     session_with_redis_sqlite,
 ) -> None:
-    """Full cycle: add model → compute → read results with Redis cache + SQLite storage."""
+    """Add model, compute and read results with Redis cache + SQLite storage."""
     torch = pytest.importorskip("torch")
     session = session_with_redis_sqlite
 
@@ -30,9 +30,7 @@ def test_session_add_model_and_compute_with_redis_sqlite(
     weights = np.arange(6, dtype=np.float32).reshape(2, 3)
 
     with session:
-        session.models.add(
-            {"layer.0.weight": torch.from_numpy(weights)}, model_id="m1"
-        )
+        session.models.add({"layer.0.weight": torch.from_numpy(weights)}, model_id="m1")
         session.compute.apply("w_sum")
         result = session.results.export_metrics("w_sum", export_format="dict")
 
@@ -82,9 +80,10 @@ def test_concurrent_reads_with_redis_sqlite(
     storage = sqlite_storage_manager
 
     # Populate data
+    rng = np.random.default_rng(0)
     num_objects = 100
     for i in range(num_objects):
-        value = {"index": i, "data": np.random.randn(10).astype(np.float32)}
+        value = {"index": i, "data": rng.standard_normal(10).astype(np.float32)}
         storage.set_field(f"obj_{i}", "field", value)
 
     def read_operation(thread_idx: int) -> dict:
@@ -141,7 +140,7 @@ def test_session_merge_with_redis_sqlite(
     temp_dir, redis_cache_manager, sqlite_storage_manager
 ) -> None:
     """Test session merge with Redis cache and SQLite storage."""
-    from diffract.containers import MainContainer, WiringConfiguration, create_main_container
+    from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
     # Create two sessions with same storage/cache
@@ -190,8 +189,8 @@ skip_not_implemented_types = true
         session_b = Session(container=container_b)
 
         # Add data to session_b
-        storage_b = container_b.storage.storage_manager()
-        cache_b = container_b.cache.cache_manager()
+        container_b.storage.storage_manager()
+        container_b.cache.cache_manager()
 
         meta = ParameterMetadata(
             uid="merge_test",
@@ -201,9 +200,7 @@ skip_not_implemented_types = true
         )
         weights = np.ones((5, 5), dtype=np.float32)
         repo_b = container_b.nn.parameter_repository()
-        proxy = ParameterDataProxy.create_and_store(
-            meta=meta, repository=repo_b
-        )
+        proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo_b)
         proxy.set_field("weights", weights)
         proxy.set_field("test_field", 42)
 
@@ -216,15 +213,13 @@ skip_not_implemented_types = true
         assert meta.uid in result
         assert result[meta.uid]["fields"]["test_field"] == 42
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "Redis" in str(e) or "redis" in str(e).lower():
             pytest.skip(f"Redis not available: {e}")
         raise
 
 
-def test_large_arrays_sqlite_blobs(
-    redis_cache_manager, sqlite_storage_manager
-) -> None:
+def test_large_arrays_sqlite_blobs(redis_cache_manager, sqlite_storage_manager) -> None:
     """Test large arrays through SQLite blob storage with Redis cache."""
     from .helpers import create_large_array
 
@@ -253,4 +248,3 @@ def test_large_arrays_sqlite_blobs(
     cached = cache.get_field(uid, field)
     assert cached.shape == large_array.shape
     np.testing.assert_allclose(cached, large_array)
-

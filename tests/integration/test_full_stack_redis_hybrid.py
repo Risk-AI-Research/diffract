@@ -207,16 +207,14 @@ def test_session_with_redis_hybrid(session_with_redis_hybrid) -> None:
     def w_sum(w: np.ndarray) -> float:
         return float(np.sum(w))
 
-    weights = np.random.randn(100, 100).astype(np.float32)
+    rng = np.random.default_rng(0)
+    weights = rng.standard_normal((100, 100)).astype(np.float32)
 
     with session:
-        session.models.add(
-            {"test.weight": torch.from_numpy(weights)}, model_id="m1"
-        )
+        session.models.add({"test.weight": torch.from_numpy(weights)}, model_id="m1")
         session.compute.apply("w_sum")
         result = session.results.export_metrics("w_sum", export_format="dict")
 
     assert len(result) == 1
     ((_, entry),) = result.items()
     assert entry["fields"]["w_sum"] == float(np.sum(weights))
-

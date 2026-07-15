@@ -66,9 +66,9 @@ def test_session_compute_and_get_results_roundtrip(temp_dir: Path) -> None:
     _write_ram_config(cfg)
 
     container = create_main_container(cfg)
-    storage = container.storage.storage_manager()
+    container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     # Pre-populate one parameter in storage so Session loads it at init.
     meta = ParameterMetadata(
@@ -123,9 +123,9 @@ def test_session_patch_meta_strict_conflict_raises(temp_dir: Path) -> None:
     _write_ram_config(cfg)
 
     container = create_main_container(cfg)
-    storage = container.storage.storage_manager()
+    container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     meta = ParameterMetadata(
         uid="p_meta",
@@ -149,9 +149,9 @@ def test_session_patch_meta_force_overwrites_and_persists(temp_dir: Path) -> Non
     _write_ram_config(cfg)
 
     container = create_main_container(cfg)
-    storage = container.storage.storage_manager()
+    container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     meta = ParameterMetadata(
         uid="p_meta2",
@@ -188,7 +188,7 @@ def test_session_ingest_fields_strict_conflict_raises(temp_dir: Path) -> None:
     container = create_main_container(cfg)
     storage = container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     meta = ParameterMetadata(
         uid="p_fields", name="w", ptype=ParameterType.DENSE, model_id="m1"
@@ -211,7 +211,7 @@ def test_session_ingest_fields_force_overwrites(temp_dir: Path) -> None:
     container = create_main_container(cfg)
     storage = container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     meta = ParameterMetadata(
         uid="p_fields2", name="w", ptype=ParameterType.DENSE, model_id="m1"
@@ -233,7 +233,7 @@ def test_session_ingest_fields_simple_field(temp_dir: Path) -> None:
     _write_ram_config(cfg)
 
     container = create_main_container(cfg)
-    storage = container.storage.storage_manager()
+    container.storage.storage_manager()
     repository = container.nn.parameter_repository()
 
     meta = ParameterMetadata(
@@ -266,7 +266,6 @@ def test_session_add_and_erase_model_id(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
-    torch = import_utils.require("torch")
     nn = import_utils.require("torch.nn")
 
     model = nn.Sequential(nn.Linear(3, 2, bias=False), nn.ReLU(), nn.Linear(2, 2))
@@ -329,7 +328,7 @@ def test_session_erase_results_can_remove_dependents(temp_dir: Path) -> None:
     container = create_main_container(cfg)
     storage = container.storage.storage_manager()
     repository = container.nn.parameter_repository()
-    cache = container.cache.cache_manager()
+    container.cache.cache_manager()
 
     meta = ParameterMetadata(
         uid="p1", name="w", ptype=ParameterType.DENSE, model_id="m1"
@@ -388,11 +387,11 @@ def test_session_merge_migrates_fields_and_handles_conflicts(temp_dir: Path) -> 
     container_a = create_main_container(cfg_a)
     container_b = create_main_container(cfg_b)
 
-    storage_a = container_a.storage.storage_manager()
-    cache_a = container_a.cache.cache_manager()
-    repository_a = container_a.nn.parameter_repository()
-    storage_b = container_b.storage.storage_manager()
-    cache_b = container_b.cache.cache_manager()
+    container_a.storage.storage_manager()
+    container_a.cache.cache_manager()
+    container_a.nn.parameter_repository()
+    container_b.storage.storage_manager()
+    container_b.cache.cache_manager()
     repository_b = container_b.nn.parameter_repository()
 
     # Session A starts empty. Session B has two parameters with computed fields.
@@ -448,8 +447,8 @@ def test_session_merge_respects_field_allowlist_and_chunks(temp_dir: Path) -> No
     container_a.storage.storage_manager().clear()
     container_b.storage.storage_manager().clear()
 
-    storage_b = container_b.storage.storage_manager()
-    cache_b = container_b.cache.cache_manager()
+    container_b.storage.storage_manager()
+    container_b.cache.cache_manager()
     repository_b = container_b.nn.parameter_repository()
 
     # Two params with multiple fields to ensure we hit chunking and allowlist.
@@ -510,10 +509,10 @@ def test_session_merge_does_not_overwrite_existing_fields_when_verify_true(
     container_b.storage.storage_manager().clear()
 
     storage_a = container_a.storage.storage_manager()
-    cache_a = container_a.cache.cache_manager()
+    container_a.cache.cache_manager()
     repository_a = container_a.nn.parameter_repository()
     storage_b = container_b.storage.storage_manager()
-    cache_b = container_b.cache.cache_manager()
+    container_b.cache.cache_manager()
     repository_b = container_b.nn.parameter_repository()
 
     # A already has (model_id, name) with field 'bar'.
@@ -716,7 +715,7 @@ def test_session_list_aggregates_returns_empty_initially(temp_dir: Path) -> None
     _write_ram_config(cfg)
 
     session = Session(container=create_main_container(cfg))
-    # New API: no list_aggregates(); use export_aggregates with a field (empty before ingest)
+    # export_aggregates on a field with nothing ingested yields an empty list.
     aggregates = session.results.export_aggregates("l_overlap", export_format="list")
     assert aggregates == []
 
@@ -820,7 +819,7 @@ def test_session_erase_results_removes_aggregates(temp_dir: Path) -> None:
 
     # Register a dummy kernel producing the field so it can be erased; the
     # registry is a process-wide singleton, so the name must not shadow a
-    # real kernel (a fake "l_overlap" used to poison every later test).
+    # real kernel — a fake "l_overlap" would leak into every later test.
     registry.register_kernel(
         name="dummy_overlap",
         require_fields=(),
@@ -972,7 +971,7 @@ def test_session_list_aggregates_filters_by_field_name(temp_dir: Path) -> None:
 
 
 def test_session_list_aggregates_filters_by_model_ids(temp_dir: Path) -> None:
-    """Test that export_aggregates returns aggregates for a field (all context_models)."""
+    """Test that export_aggregates returns every context_models entry for a field."""
     cfg = temp_dir / "cfg.ini"
     _write_ram_config(cfg)
 

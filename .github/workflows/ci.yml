@@ -33,7 +33,7 @@ jobs:
         run: uv sync --extra dev --extra viz
 
       - name: Run ruff check
-        run: uv run --extra dev ruff check src/diffract
+        run: uv run --extra dev ruff check src/diffract tests conftest.py
 
   format:
     name: Format Check
@@ -61,7 +61,7 @@ jobs:
         run: uv sync --extra dev --extra viz
 
       - name: Check formatting
-        run: uv run --extra dev ruff format --check src/diffract
+        run: uv run --extra dev ruff format --check src/diffract tests conftest.py
 
   test:
     name: Tests (${{ matrix.python-version }})
@@ -90,10 +90,15 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install dependencies
-        run: uv sync --python ${{ matrix.python-version }} --extra dev --extra viz --extra torch
+        run:
+          uv sync --python ${{ matrix.python-version }} --extra dev --extra viz --extra
+          torch --extra taichi
 
       - name: Run pytest
-        run: uv run --python ${{ matrix.python-version }} --extra dev --extra viz --extra torch pytest -m "not integration" tests README.md --cov=src/diffract --cov-report=term-missing
+        run:
+          uv run --python ${{ matrix.python-version }} --extra dev --extra viz --extra
+          torch --extra taichi pytest -m "not integration" tests README.md
+          --cov=src/diffract --cov-report=term-missing
         env:
           PYTHONPATH: src
 
@@ -120,10 +125,12 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install dependencies
-        run: uv sync --extra docs
+        run: uv sync --extra docs --extra taichi
 
       - name: Build Sphinx docs
-        run: uv run --extra docs sphinx-build -b html docs docs/_build/html
+        run:
+          uv run --extra docs --extra taichi sphinx-build -b html -W --keep-going docs
+          docs/_build/html
 
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'

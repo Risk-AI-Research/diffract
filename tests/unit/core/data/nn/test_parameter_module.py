@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -7,6 +7,9 @@ from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository
 from diffract.core.data.nn.params.schema import ParameterType
+
+if TYPE_CHECKING:
+    from diffract.core.data.nn.params.interface import IParameterView
 
 
 class FakeStorage:
@@ -32,8 +35,8 @@ class FakeStorage:
     ) -> Any:
         try:
             return self._store[field_name][obj_uid]
-        except KeyError:
-            raise KeyError
+        except KeyError as err:
+            raise KeyError(obj_uid, field_name) from err
 
     def has_field(
         self, obj_uid: str, field_name: str, *, table: str = "default"
@@ -52,7 +55,9 @@ class FakeStorage:
     def erase_field_for_all(self, field_name: str, *, table: str = "default") -> None:
         self._store.pop(field_name, None)
 
-    def list_fields(self, obj_uid: str = None, *, table: str = "default") -> list[str]:
+    def list_fields(
+        self, obj_uid: str | None = None, *, table: str = "default"
+    ) -> list[str]:
         res: list[str] = []
         for f, data in self._store.items():
             if obj_uid is None or obj_uid in data:
@@ -313,20 +318,20 @@ def test_proxy_create_and_store(managers):
     storage, cache, metadata_index = managers
     repository = ParameterRepository(storage, metadata_index, cache)
     ParameterRepository.define_schema(metadata_index)
-    
+
     meta = ParameterMetadata(name="w", ptype=ParameterType.DENSE, model_id="m1")
-    proxy = ParameterDataProxy.create_and_store(
+    ParameterDataProxy.create_and_store(
         meta=meta,
         repository=repository,
     )
-    
+
     # Verify metadata was stored in index
     stored = metadata_index.get("parameters", meta.uid)
     assert stored is not None
     assert stored["name"] == "w"
     assert stored["model_id"] == "m1"
     assert stored["ptype"] == "DENSE"
-    
+
     # Verify we can get the proxy back
     proxy2 = repository.get_proxy(meta.uid)
     assert proxy2.meta.uid == meta.uid
@@ -360,14 +365,13 @@ def test_sequence_protocol_and_order(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p3 = make_proxy("z", ParameterType.DENSE, "m1", storage, cache, metadata_index)
-    p2 = make_proxy("a", ParameterType.DENSE, "m2", storage, cache, metadata_index)
-    p1 = make_proxy("a", ParameterType.UNKNOWN, "m0", storage, cache, metadata_index)
+    make_proxy("z", ParameterType.DENSE, "m1", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "m2", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.UNKNOWN, "m0", storage, cache, metadata_index)
 
     assert len(c) == 3
-    # Get all proxies
     names = [p.meta.name for p in c]
-    assert set(names) == {"z", "a", "a"}
+    assert sorted(names) == ["a", "a", "z"]
 
 
 def test_duplicate_handling(managers):
@@ -375,10 +379,9 @@ def test_duplicate_handling(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("a", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
 
-    _ = list(c)
     by_names = [p.meta.model_id for p in c if p.meta.name == "a"]
     assert set(by_names) == {"m0", "m1"}
 
@@ -388,9 +391,9 @@ def test_filter_by_name(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
-    p3 = make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
+    make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
 
     cf = make_view(c).filter_by_name("a", "c")
     assert sorted([p.meta.name for p in cf]) == ["a", "c"]
@@ -401,9 +404,11 @@ def test_filter_by_name_regexp_prefix(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("some_model", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("some_model_2", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p3 = make_proxy("other", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("some_model", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy(
+        "some_model_2", ParameterType.DENSE, "m0", storage, cache, metadata_index
+    )
+    make_proxy("other", ParameterType.DENSE, "m0", storage, cache, metadata_index)
 
     # exact by default
     exact = make_view(c).filter_by_name("some_model")
@@ -419,9 +424,9 @@ def test_filter_by_ptype(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
-    p3 = make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
+    make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
 
     cd = make_view(c).filter_by_ptype("DENSE")
     assert sorted([p.meta.name for p in cd]) == ["a", "c"]
@@ -432,9 +437,9 @@ def test_filter_by_model_id(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
-    p3 = make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("b", ParameterType.UNKNOWN, "m1", storage, cache, metadata_index)
+    make_proxy("c", ParameterType.DENSE, "m1", storage, cache, metadata_index)
 
     cm = make_view(c).filter_by_model_id("m1")
     assert sorted([p.meta.name for p in cm]) == ["b", "c"]
@@ -445,9 +450,9 @@ def test_filter_by_model_id_regexp_prefix(managers):
     ParameterRepository.define_schema(metadata_index)
     c = ParameterRepository(storage, metadata_index, cache)
 
-    p1 = make_proxy("a", ParameterType.DENSE, "some_model", storage, cache, metadata_index)
-    p2 = make_proxy("b", ParameterType.DENSE, "some_model_2", storage, cache, metadata_index)
-    p3 = make_proxy("c", ParameterType.DENSE, "other", storage, cache, metadata_index)
+    make_proxy("a", ParameterType.DENSE, "some_model", storage, cache, metadata_index)
+    make_proxy("b", ParameterType.DENSE, "some_model_2", storage, cache, metadata_index)
+    make_proxy("c", ParameterType.DENSE, "other", storage, cache, metadata_index)
 
     # exact by default
     exact = make_view(c).filter_by_model_id("some_model")
@@ -455,7 +460,10 @@ def test_filter_by_model_id_regexp_prefix(managers):
 
     # regex via "re:" prefix (fullmatch semantics)
     re_matched = make_view(c).filter_by_model_id("re:some_model.*")
-    assert sorted([p.meta.model_id for p in re_matched]) == ["some_model", "some_model_2"]
+    assert sorted([p.meta.model_id for p in re_matched]) == [
+        "some_model",
+        "some_model_2",
+    ]
 
 
 def test_filter_by_field(managers):
@@ -464,7 +472,7 @@ def test_filter_by_field(managers):
     c = ParameterRepository(storage, metadata_index, cache)
 
     p1 = make_proxy("a", ParameterType.DENSE, "m0", storage, cache, metadata_index)
-    p2 = make_proxy("b", ParameterType.DENSE, "m0", storage, cache, metadata_index)
+    make_proxy("b", ParameterType.DENSE, "m0", storage, cache, metadata_index)
 
     storage.set_field(p1.meta.uid, "weights", [1, 2, 3])
 

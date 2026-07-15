@@ -75,6 +75,7 @@ instance/
 # Sphinx documentation
 docs/_build/
 docs/reference/_generated/
+docs/reference/metrics/_generated_table.md
 
 # PyBuilder
 target/

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -37,28 +38,32 @@ class _Param:
     def has_field(self, field: str) -> bool:
         return field in self._fields
 
-    def get_field(self, field: str, *, auto_prefetch: bool = False) -> Any:  # noqa: ARG002
+    def get_field(self, field: str, *, auto_prefetch: bool = False) -> Any:
         return self._fields[field]
 
 
 class _Collection:
-    def __init__(self, params: Iterable[_Param], *, fail_prefetch: bool = False) -> None:
+    def __init__(
+        self, params: Iterable[_Param], *, fail_prefetch: bool = False
+    ) -> None:
         self._params = list(params)
         self._fail_prefetch = fail_prefetch
 
     def __iter__(self):
         return iter(self._params)
 
-    def list_fields_by_uid(self, *, parallel: object | None = None) -> dict[str, list[str]]:  # noqa: ARG002
-        return {p.meta.uid: list(p._fields.keys()) for p in self._params}  # noqa: SLF001
+    def list_fields_by_uid(
+        self, *, parallel: object | None = None
+    ) -> dict[str, list[str]]:
+        return {p.meta.uid: list(p._fields.keys()) for p in self._params}
 
     def prefetch_fields(
         self,
         *,
         fields_by_uid: dict[str, list[str]] | None = None,
         fields: list[str] | None = None,
-        verify_prefetch: bool = False,  # noqa: ARG002
-        parallel: object | None = None,  # noqa: ARG002
+        verify_prefetch: bool = False,
+        parallel: object | None = None,
     ) -> bool:
         if self._fail_prefetch:
             raise RuntimeError("prefetch failed")
@@ -132,7 +137,9 @@ def test_export_results_dict_format_collects_metadata_and_fields() -> None:
     p = _Param(meta=meta, fields={"a": 1, "b": np.asarray([1, 2])})
     params = _Collection([p], fail_prefetch=True)
 
-    result = exporter.export_results("a", "b", parameters=params, formatter=DictFormatter())
+    result = exporter.export_results(
+        "a", "b", parameters=params, formatter=DictFormatter()
+    )
     got = result.scalars
     assert set(got.keys()) == {"u1"}
     assert got["u1"]["metadata"]["name"] == "layer.0.weight"
@@ -154,8 +161,10 @@ def test_export_results_json_serializes_arrays() -> None:
     )
     p = _Param(meta=meta, fields={"x": np.asarray([1.0, 2.0], dtype=np.float32)})
 
-    got = exporter.export_results("x", parameters=_Collection([p]), formatter=JsonFormatter())
-    assert "\"x\"" in got
+    got = exporter.export_results(
+        "x", parameters=_Collection([p]), formatter=JsonFormatter()
+    )
+    assert '"x"' in got
     assert '"x": [' in got
     assert "1.0" in got
     assert "2.0" in got
@@ -188,7 +197,11 @@ def test_export_results_dict_format_with_aggregates() -> None:
     aggregates = _AggregateView([agg])
 
     result = exporter.export_results(
-        "frob_norm", "l_overlap", parameters=params, aggregates=aggregates, formatter=DictFormatter()
+        "frob_norm",
+        "l_overlap",
+        parameters=params,
+        aggregates=aggregates,
+        formatter=DictFormatter(),
     )
 
     # Check scalars
@@ -227,7 +240,11 @@ def test_export_results_json_format_includes_aggregates() -> None:
     aggregates = _AggregateView([agg])
 
     got = exporter.export_results(
-        "score", "agg", parameters=_Collection([p]), aggregates=aggregates, formatter=JsonFormatter()
+        "score",
+        "agg",
+        parameters=_Collection([p]),
+        aggregates=aggregates,
+        formatter=JsonFormatter(),
     )
 
     assert '"score": 42' in got
@@ -244,7 +261,9 @@ def test_export_results_only_scalars_without_aggregates() -> None:
     p = _Param(meta=meta, fields={"metric": 1.0, "other": 2.0})
 
     # No aggregates
-    result = exporter.export_results("metric", parameters=_Collection([p]), formatter=DictFormatter())
+    result = exporter.export_results(
+        "metric", parameters=_Collection([p]), formatter=DictFormatter()
+    )
 
     # Only metric should be in scalars
     assert result.scalars["u1"]["fields"]["metric"] == 1.0

@@ -21,23 +21,27 @@ repos:
         files: ^src/.*\.py$
 
   # Ruff - Fast Python linter and formatter (replaces Black, Flake8, isort, pyupgrade)
+  # Linting and formatting. Scoped to the same paths as `make lint` and CI.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.0
+    rev: v0.14.9
     hooks:
-      # Run the linter with auto-fixes
-      - id: ruff
+      - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
         types_or: [python, pyi]
-      # Run the formatter
+        files: ^(src/diffract/|tests/|conftest\.py$)
       - id: ruff-format
         types_or: [python, pyi]
+        files: ^(src/diffract/|tests/|conftest\.py$)
 
-  # Type checking with mypy
+  # Type checking is a developer aid, not a gate (see [tool.mypy] in
+  # pyproject.toml): run it on demand with `make mypy`, or
+  # `pre-commit run --hook-stage manual mypy`.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.13.0
     hooks:
       - id: mypy
-        args: [--strict, --show-error-codes]
+        stages: [manual]
+        args: [--show-error-codes]
         files: ^src/.*\.py$
         additional_dependencies:
           - types-requests
@@ -68,13 +72,16 @@ repos:
 
   # Documentation formatting
   - repo: https://github.com/executablebooks/mdformat
-    rev: 0.7.20
+    rev: 1.0.0
     hooks:
       - id: mdformat
         additional_dependencies:
           - mdformat-gfm
           - mdformat-black
         files: \.(md|markdown)$
+        # MyST reference pages use inline math and directives the GFM
+        # formatter cannot round-trip; they are excluded here.
+        exclude: ^docs/reference/metrics/
 
   # Spell checking
   - repo: https://github.com/codespell-project/codespell
@@ -89,7 +96,9 @@ repos:
     rev: v4.0.0-alpha.8
     hooks:
       - id: prettier
-        types_or: [yaml, markdown, json]
+        # Markdown is owned by mdformat; prettier handles the data formats.
+        # (Its prose-wrap splits inline math and conflicts with mdformat.)
+        types_or: [yaml, json]
         args: [--prose-wrap=always, --print-width=88]
 
 ci:

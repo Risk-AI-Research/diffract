@@ -8,11 +8,12 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.stress, pytest.mark.slow]
 
 
-def test_stress_large_arrays_hybrid(redis_cache_manager, hybrid_storage_manager) -> None:
+def test_stress_large_arrays_hybrid(
+    redis_cache_manager, hybrid_storage_manager
+) -> None:
     """Stress test: 1GB+ arrays through Hybrid storage."""
     from .helpers import create_large_array, measure_memory_usage
 
-    cache = redis_cache_manager
     storage = hybrid_storage_manager
 
     # Create multiple large arrays (total > 1GB)
@@ -42,12 +43,15 @@ def test_stress_large_arrays_hybrid(redis_cache_manager, hybrid_storage_manager)
     assert memory_growth_mb < 500, f"Excessive memory growth: {memory_growth_mb}MB"
 
 
-def test_stress_many_parameters_sqlite(redis_cache_manager, sqlite_storage_manager) -> None:
+def test_stress_many_parameters_sqlite(
+    redis_cache_manager, sqlite_storage_manager
+) -> None:
     """Stress test: 10,000+ parameters in SQLite."""
     cache = redis_cache_manager
     storage = sqlite_storage_manager
 
     num_parameters = 10000
+    rng = np.random.default_rng(0)
 
     # Create many parameters
     with storage:
@@ -56,7 +60,7 @@ def test_stress_many_parameters_sqlite(redis_cache_manager, sqlite_storage_manag
             value = {
                 "index": i,
                 "name": f"layer_{i % 100}.weight",
-                "data": np.random.randn(10).astype(np.float32).tolist(),
+                "data": rng.standard_normal(10).astype(np.float32).tolist(),
             }
             storage.set_field(uid, "metadata", value)
 
@@ -86,7 +90,9 @@ def test_stress_many_parameters_sqlite(redis_cache_manager, sqlite_storage_manag
     assert cached_count > 0
 
 
-def test_stress_memory_limits_redis(redis_cache_manager, sqlite_storage_manager) -> None:
+def test_stress_memory_limits_redis(
+    redis_cache_manager, sqlite_storage_manager
+) -> None:
     """Stress test: work at Redis memory limits."""
     cache = redis_cache_manager
     storage = sqlite_storage_manager
@@ -98,11 +104,12 @@ def test_stress_memory_limits_redis(redis_cache_manager, sqlite_storage_manager)
     # Create objects that will fill cache
     # Each object ~2MB
     num_objects = int(max_memory_mb / 2) + 10  # Slightly more than limit
+    rng = np.random.default_rng(0)
 
     for i in range(num_objects):
         uid = f"mem_test_{i}"
         # ~2MB of data
-        large_data = np.random.randn(500000).astype(np.float32).tolist()
+        large_data = rng.standard_normal(500000).astype(np.float32).tolist()
         storage.set_field(uid, "field", large_data)
 
     # Try to cache all (will trigger eviction)
@@ -136,7 +143,7 @@ def test_stress_batch_size_limits(sqlite_storage_manager) -> None:
     from diffract.core.storage.sqlite_manager import SQLiteStorageManager
 
     small_batch_storage = SQLiteStorageManager(
-        path=storage._path,  # noqa: SLF001
+        path=storage._path,
         batch_size_limit_bytes=10 * 1024 * 1024,  # 10MB limit
         batch_soft_limit_ratio=0.9,
     )
@@ -146,11 +153,12 @@ def test_stress_batch_size_limits(sqlite_storage_manager) -> None:
         # Create objects that will exceed batch limit
         # Each object ~1MB
         num_objects = 15  # 15MB total > 10MB limit
+        rng = np.random.default_rng(0)
 
         for i in range(num_objects):
             uid = f"batch_test_{i}"
             # ~1MB of data
-            large_data = np.random.randn(250000).astype(np.float32).tolist()
+            large_data = rng.standard_normal(250000).astype(np.float32).tolist()
             # Should trigger auto-flush
             small_batch_storage.set_field(uid, "field", large_data)
 
@@ -171,7 +179,7 @@ def test_stress_blob_file_operations(sqlite_storage_manager) -> None:
     from diffract.core.storage.sqlite_manager import SQLiteStorageManager
 
     blob_storage = SQLiteStorageManager(
-        path=storage._path,  # noqa: SLF001
+        path=storage._path,
         array_threshold=1024 * 1024,  # 1MB threshold
         blob_write_workers=8,  # Parallel blob writes
     )
@@ -238,4 +246,3 @@ def test_stress_mixed_sizes_hybrid(redis_cache_manager, hybrid_storage_manager) 
     for i in range(0, num_large, 10):
         uid = f"large_{i}"
         assert storage.has_field(uid, "weights")
-

@@ -16,7 +16,9 @@ from diffract.core.data.nn.params.schema import ParameterType
 pytestmark = pytest.mark.unit
 
 
-def test_flax_params_extractor_dense_only(storage_cache_metadata: tuple[object, object, object]) -> None:
+def test_flax_params_extractor_dense_only(
+    storage_cache_metadata: tuple[object, object, object],
+) -> None:
     if not (import_utils.is_available("flax") and import_utils.is_available("jax")):
         pytest.skip("flax/jax not installed")
 
@@ -32,13 +34,12 @@ def test_flax_params_extractor_dense_only(storage_cache_metadata: tuple[object, 
         def __call__(self, x):
             x = flax.linen.Dense(3, use_bias=False)(x)
             x = flax.linen.relu(x)
-            x = flax.linen.Dense(2, use_bias=False)(x)
-            return x
+            return flax.linen.Dense(2, use_bias=False)(x)
 
     model = MLP()
     variables = model.init(jax.random.PRNGKey(0), jnp.ones((1, 4), dtype=jnp.float32))
 
-    from diffract.core.data.nn.extractors.flax import (  # noqa: PLC0415
+    from diffract.core.data.nn.extractors.flax import (
         FlaxParamsExtractor,
     )
 
@@ -82,11 +83,11 @@ def test_flax_params_extractor_dense_only_without_flax(
     monkeypatch.setitem(sys.modules, "flax", flax_mod)
     monkeypatch.setitem(sys.modules, "jax", jax_mod)
 
-    from diffract.core.data.nn.extractors.handlers import (  # noqa: PLC0415
+    import diffract.core.data.nn.extractors.flax as flax_extractor
+    import diffract.core.data.nn.extractors.handlers as handlers_pkg
+    from diffract.core.data.nn.extractors.handlers import (
         flax_handlers,
     )
-    import diffract.core.data.nn.extractors.handlers as handlers_pkg  # noqa: PLC0415
-    import diffract.core.data.nn.extractors.flax as flax_extractor  # noqa: PLC0415
 
     importlib.reload(flax_handlers)
     importlib.reload(handlers_pkg)

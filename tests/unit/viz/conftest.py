@@ -69,7 +69,9 @@ def mock_session():
     def mock_export_aggregates(*fields, **kwargs):
         return []
 
-    def mock_export(*fields, sources="all", export_format="dict", expand_contextual=True, **kwargs):
+    def mock_export(
+        *fields, sources="all", export_format="dict", expand_contextual=True, **kwargs
+    ):
         return sample_data
 
     session.results = MagicMock()
@@ -86,7 +88,8 @@ def mock_session():
         model_ids = kwargs.get("model_ids")
         if model_ids:
             filtered_data = {
-                k: v for k, v in sample_data.items()
+                k: v
+                for k, v in sample_data.items()
                 if v["metadata"]["model_id"] in model_ids
             }
         else:

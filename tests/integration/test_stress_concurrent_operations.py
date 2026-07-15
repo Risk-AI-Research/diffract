@@ -9,7 +9,12 @@ import time
 import numpy as np
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.stress, pytest.mark.network, pytest.mark.slow]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.stress,
+    pytest.mark.network,
+    pytest.mark.slow,
+]
 
 REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
 
@@ -17,7 +22,7 @@ REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
 def test_stress_concurrent_reads_redis_sqlite(
     redis_cache_manager, sqlite_storage_manager
 ) -> None:
-    """Stress test: 50+ threads reading concurrently with Redis cache + SQLite storage."""
+    """Stress test: 50 threads reading concurrently via Redis cache + SQLite."""
     from .helpers import run_concurrent_operations
 
     cache = redis_cache_manager
@@ -25,9 +30,10 @@ def test_stress_concurrent_reads_redis_sqlite(
 
     # Populate data
     num_objects = 200
+    rng = np.random.default_rng(0)
     for i in range(num_objects):
-        value = {"index": i, "data": np.random.randn(100).astype(np.float32).tolist()}
-        storage.set_field(f"obj_{i}", "field", value)
+        data = rng.standard_normal(100).astype(np.float32).tolist()
+        storage.set_field(f"obj_{i}", "field", {"index": i, "data": data})
 
     def read_operation(thread_idx: int) -> dict:
         obj_idx = (thread_idx * 7 + int(time.time() * 1000) % 100) % num_objects
@@ -59,15 +65,18 @@ def test_stress_concurrent_writes_redis_sqlite(
 
     num_threads = 20
     writes_per_thread = 50
-    results: list[dict] = []
     exceptions: list[Exception] = []
-    results_lock = threading.Lock()
     exceptions_lock = threading.Lock()
 
     def write_operation(thread_idx: int) -> None:
+        rng = np.random.default_rng(thread_idx)
         for i in range(writes_per_thread):
             uid = f"write_obj_{thread_idx}_{i}"
-            value = {"thread": thread_idx, "write": i, "data": np.random.randn(10).astype(np.float32).tolist()}
+            value = {
+                "thread": thread_idx,
+                "write": i,
+                "data": rng.standard_normal(10).astype(np.float32).tolist(),
+            }
 
             try:
                 # Write to storage (serialized)
@@ -76,14 +85,15 @@ def test_stress_concurrent_writes_redis_sqlite(
 
                 # Write to cache (may have contention)
                 cache.set_field(uid, "field", value)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 with exceptions_lock:
                     exceptions.append(e)
                 raise
 
-    threads = [threading.Thread(target=write_operation, args=(i,)) for i in range(num_threads)]
+    threads = [
+        threading.Thread(target=write_operation, args=(i,)) for i in range(num_threads)
+    ]
 
-    start_time = time.time()
     for t in threads:
         t.start()
 
@@ -190,7 +200,9 @@ def test_stress_connection_pool_exhaustion(sqlite_storage_manager) -> None:
                 with exceptions_lock:
                     exceptions.append(e)
 
-    threads = [threading.Thread(target=read_operation, args=(i,)) for i in range(num_threads)]
+    threads = [
+        threading.Thread(target=read_operation, args=(i,)) for i in range(num_threads)
+    ]
 
     for t in threads:
         t.start()
@@ -205,16 +217,19 @@ def test_stress_connection_pool_exhaustion(sqlite_storage_manager) -> None:
     # The key is that the system doesn't deadlock or crash
 
 
-def test_stress_redis_eviction_under_load(redis_cache_manager, sqlite_storage_manager) -> None:
+def test_stress_redis_eviction_under_load(
+    redis_cache_manager, sqlite_storage_manager
+) -> None:
     """Stress test: Redis eviction under memory pressure."""
     cache = redis_cache_manager
     storage = sqlite_storage_manager
 
     # Create many objects that exceed Redis memory limit
     num_objects = 500
+    rng = np.random.default_rng(0)
     for i in range(num_objects):
         # Each object ~1MB
-        large_data = np.random.randn(250000).astype(np.float32).tolist()
+        large_data = rng.standard_normal(250000).astype(np.float32).tolist()
         storage.set_field(f"obj_{i}", "field", large_data)
 
     # Try to cache all (will trigger eviction)
@@ -246,8 +261,9 @@ def test_stress_hdf5_swmr_concurrent_reads(hdf5_storage_manager) -> None:
 
     # Populate data
     num_objects = 100
+    rng = np.random.default_rng(0)
     for i in range(num_objects):
-        arr = np.random.randn(100, 100).astype(np.float32)
+        arr = rng.standard_normal((100, 100)).astype(np.float32)
         storage.set_field(f"obj_{i}", "array", arr)
 
     num_threads = 30
@@ -266,7 +282,9 @@ def test_stress_hdf5_swmr_concurrent_reads(hdf5_storage_manager) -> None:
                 with exceptions_lock:
                     exceptions.append(e)
 
-    threads = [threading.Thread(target=read_operation, args=(i,)) for i in range(num_threads)]
+    threads = [
+        threading.Thread(target=read_operation, args=(i,)) for i in range(num_threads)
+    ]
 
     for t in threads:
         t.start()
@@ -278,5 +296,6 @@ def test_stress_hdf5_swmr_concurrent_reads(hdf5_storage_manager) -> None:
             raise TimeoutError(msg)
 
     # Some exceptions may occur, but should be minimal
-    assert len(exceptions) < num_threads * operations_per_thread * 0.1  # Less than 10% failure rate
-
+    assert (
+        len(exceptions) < num_threads * operations_per_thread * 0.1
+    )  # Less than 10% failure rate

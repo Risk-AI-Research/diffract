@@ -118,6 +118,7 @@ skip_not_implemented_types = true
 
     # Populate session_b with many parameters
     num_params = 500
+    rng = np.random.default_rng(0)
     proxies = []
     for i in range(num_params):
         meta = ParameterMetadata(
@@ -126,7 +127,7 @@ skip_not_implemented_types = true
             ptype=ParameterType.DENSE,
             model_id=f"model_{i % 10}",
         )
-        weights = np.random.randn(20, 20).astype(np.float32)
+        weights = rng.standard_normal((20, 20)).astype(np.float32)
         proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo_b)
         proxy.set_field("weights", weights)
         proxy.set_field("computed_field", float(i))
@@ -190,12 +191,13 @@ skip_not_implemented_types = true
         WiringConfiguration.wire(container)
         repo = container.nn.parameter_repository()
         cache = container.cache.cache_manager()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "redis" in str(e).lower():
             pytest.skip(f"Redis not available: {e}")
         raise
 
     num_params = 200
+    rng = np.random.default_rng(0)
     for i in range(num_params):
         meta = ParameterMetadata(
             uid=f"prefetch_{i}",
@@ -204,7 +206,7 @@ skip_not_implemented_types = true
             model_id="prefetch_model",
         )
         proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo)
-        proxy.set_field("weights", np.random.randn(30, 30).astype(np.float32))
+        proxy.set_field("weights", rng.standard_normal((30, 30)).astype(np.float32))
         proxy.set_field("field_a", float(i))
         proxy.set_field("field_b", float(i * 2))
 

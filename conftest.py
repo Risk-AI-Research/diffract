@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -63,7 +64,7 @@ def _build_readme_models() -> dict[str, Any]:
 
 
 def _readme_setup(namespace: dict[str, Any]) -> None:
-    namespace["__readme_cwd"] = os.getcwd()
+    namespace["__readme_cwd"] = str(Path.cwd())
     workdir = tempfile.mkdtemp(prefix="diffract-readme-")
     os.chdir(workdir)
     namespace.update(_build_readme_models())

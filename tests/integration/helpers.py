@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -17,8 +18,7 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 try:
-    import torch
-    import torch.nn as nn
+    from torch import nn
 
     TORCH_AVAILABLE = True
 except ImportError:
@@ -58,14 +58,13 @@ def create_test_model(framework: str = "torch") -> Any:
         if not TF_AVAILABLE:
             msg = "TensorFlow not available"
             raise ImportError(msg)
-        model = tf.keras.Sequential(
+        return tf.keras.Sequential(
             [
                 tf.keras.layers.Dense(20, input_shape=(10,), use_bias=False),
                 tf.keras.layers.ReLU(),
                 tf.keras.layers.Dense(5, use_bias=True),
             ]
         )
-        return model
 
     msg = f"Unknown framework: {framework}"
     raise ValueError(msg)
@@ -83,7 +82,8 @@ def create_large_array(size_mb: int, dtype: np.dtype = np.float32) -> np.ndarray
     """
     size_bytes = size_mb * 1024 * 1024
     size_elements = size_bytes // np.dtype(dtype).itemsize
-    return np.random.randn(size_elements).astype(dtype)
+    rng = np.random.default_rng()
+    return rng.standard_normal(size_elements).astype(dtype)
 
 
 def measure_memory_usage() -> dict[str, float]:
@@ -148,4 +148,3 @@ def run_concurrent_operations(
             raise TimeoutError(msg)
 
     return results, exceptions
-

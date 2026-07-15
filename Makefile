@@ -1,9 +1,10 @@
 UV := $(shell if [ -x ./.venv/bin/uv ]; then echo ./.venv/bin/uv; \
-PYTHON ?= 3.12
 	elif command -v uv >/dev/null 2>&1; then echo uv; \
 	else echo "python3 -m uv"; fi)
+PYTHON ?= 3.12
+LINT_PATHS := src/diffract tests conftest.py
 .DEFAULT_GOAL := help
-.PHONY: help install install-dev install-full lint lint-unsafe format mypy test docs docs-serve docs-clean lock clean clean-all check coverage-open
+.PHONY: help install install-dev install-full lint lint-unsafe lint-check format format-check mypy test test-light test-integration test-stress docs docs-serve docs-clean lock clean clean-all check coverage-open
 
 help: ## Show available make targets
 	@printf "Available targets:\n"
@@ -12,12 +13,14 @@ help: ## Show available make targets
 	@printf "  install-full  \tInstall all dependencies including all extras\n"
 	@printf "  lint          \tRun ruff on source\n"
 	@printf "  lint-unsafe   \tRun ruff with unsafe fixes\n"
+	@printf "  lint-check    \tVerify lint without writing (CI-equivalent)\n"
 	@printf "  format        \tFormat source code via ruff\n"
+	@printf "  format-check  \tVerify formatting without writing (CI-equivalent)\n"
+	@printf "  mypy          \tRun mypy (best-effort, never fails)\n"
 	@printf "  test          \tRun pytest with coverage\n"
 	@printf "  test-light    \tRun unit tests only (no integration/stress)\n"
 	@printf "  test-integration \tRun integration tests\n"
 	@printf "  test-stress   \tRun stress tests (slow, resource-intensive)\n"
-	@printf "  test-all      \tRun all tests including integration and stress\n"
 	@printf "  docs          \tBuild docs (requires docs/ tree)\n"
 	@printf "  docs-serve    \tLive-reload docs and open browser\n"
 	@printf "  docs-clean    \tRemove docs build artifacts\n"
@@ -37,23 +40,29 @@ install-full: ## Install all dependencies including all extras
 	$(UV) sync --extra common --extra dev --extra torch --extra redis --extra viz --extra pandas --extra polars --extra zarr --extra notebooks --extra taichi --extra docs
 
 lint: ## Run ruff on the source tree
-	$(UV) run --extra dev ruff check src/diffract --fix
+	$(UV) run --extra dev ruff check $(LINT_PATHS) --fix
 
 lint-unsafe: ## Run ruff on the source tree
-	$(UV) run --extra dev ruff check src/diffract --unsafe-fixes --fix
+	$(UV) run --extra dev ruff check $(LINT_PATHS) --unsafe-fixes --fix
+
+lint-check: ## Verify lint without writing (CI-equivalent)
+	$(UV) run --extra dev ruff check $(LINT_PATHS)
+
+format-check: ## Verify formatting without writing (CI-equivalent)
+	$(UV) run --extra dev ruff format --check $(LINT_PATHS)
 
 mypy: ## Run mypy type checks
 	@# Best-effort developer aid: show mypy output, but do not fail the build.
 	-$(UV) run --extra dev mypy src/diffract
 
 format: ## Format source via ruff
-	$(UV) run --extra dev ruff format src/diffract
+	$(UV) run --extra dev ruff format $(LINT_PATHS)
 
 test: ## Run pytest with coverage
-	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars --extra zarr pytest tests README.md --cov=src/diffract --cov-report=term-missing --cov-report=html
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars --extra zarr --extra taichi pytest tests README.md --cov=src/diffract --cov-report=term-missing --cov-report=html
 
 test-light: ## Run unit tests only (no integration/stress)
-	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra viz --extra torch --extra zarr pytest -m "not integration and not stress" tests README.md --cov=src/diffract --cov-report=term-missing
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra viz --extra torch --extra zarr --extra taichi pytest -m "not integration and not stress" tests README.md --cov=src/diffract --cov-report=term-missing
 
 test-integration: ## Run integration tests
 	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "integration and not stress" tests
@@ -65,8 +74,8 @@ check: ## Run lint and mypy
 	$(MAKE) lint
 	$(MAKE) mypy
 
-docs: ## Build Sphinx docs (expects docs/ sources)
-	$(UV) run --extra docs sphinx-build -b html docs docs/_build/html
+docs: ## Build Sphinx docs (expects docs/ sources); warnings are errors
+	$(UV) run --extra docs --extra taichi sphinx-build -b html -W --keep-going docs docs/_build/html
 
 docs-serve: docs-clean ## Watch docs and open local server (requires docs extra)
 	$(UV) run --extra docs python -m sphinx_autobuild docs docs/_build/html --open-browser -aE

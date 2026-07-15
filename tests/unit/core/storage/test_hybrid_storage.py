@@ -1,6 +1,6 @@
 """Tests for HybridStorageManager."""
-import os
-import tempfile
+
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,24 +10,22 @@ from diffract.core.storage.hybrid_manager import HybridStorageManager
 from diffract.core.storage.sqlite_manager import SQLiteStorageManager
 
 
-@pytest.fixture
-def tmpdir():
-    with tempfile.TemporaryDirectory() as directory:
-        yield directory
+def _large_array() -> np.ndarray:
+    return np.random.default_rng(0).standard_normal((100, 100)).astype(np.float32)
 
 
 @pytest.fixture
-def storage(tmpdir: str) -> HybridStorageManager:
+def storage(temp_dir: Path) -> HybridStorageManager:
     """Create a hybrid manager with a low threshold for testing."""
     light = SQLiteStorageManager(
-        path=os.path.join(tmpdir, "store.db"),
+        path=str(temp_dir / "store.db"),
         array_threshold=1024 * 1024,  # 1MB - will store small arrays inline
     )
     light.connect()
 
     # keep_file_open=False avoids HDF5 read/write handle conflicts without SWMR
     heavy = HDF5StorageManager(
-        path=os.path.join(tmpdir, "store.h5"),
+        path=str(temp_dir / "store.h5"),
         swmr=False,
         verify_index=True,
         keep_file_open=False,
@@ -65,7 +63,7 @@ def test_large_array_goes_to_hdf5(storage: HybridStorageManager) -> None:
     """Large array should be stored in HDF5 with sentinel in SQLite."""
     uid, field = "u2", "weights"
     # Array larger than 1KB threshold
-    arr = np.random.randn(100, 100).astype(np.float32)
+    arr = _large_array()
     assert arr.nbytes > 1024
 
     storage.set_field(uid, field, arr)
@@ -106,12 +104,13 @@ def test_get_field_metadata_from_both_backends(storage: HybridStorageManager) ->
     assert meta_sqlite.get("kind") == "matrix"
 
     uid_h5, field_h5 = "m2", "big_meta"
-    arr_big = np.random.randn(100, 100).astype(np.float32)
+    arr_big = _large_array()
     storage.set_field(uid_h5, field_h5, arr_big)
 
     meta_h5 = storage.get_field_metadata(uid_h5, field_h5)
     assert meta_h5 is not None
     assert meta_h5.get("kind") in ("matrix", "ndarray")
+
 
 def test_overwrite_moves_data_between_backends(storage: HybridStorageManager) -> None:
     """Overwriting a field should move data and clean up old location."""
@@ -123,7 +122,7 @@ def test_overwrite_moves_data_between_backends(storage: HybridStorageManager) ->
     assert not storage.heavy.has_field(uid, field)
 
     # Overwrite with large array -> moves to HDF5
-    large_arr = np.random.randn(100, 100).astype(np.float32)
+    large_arr = _large_array()
     storage.set_field(uid, field, large_arr)
     assert storage.light.get_field(uid, field) == "__HEAVY__"
     assert storage.heavy.has_field(uid, field)
@@ -146,7 +145,7 @@ def test_erase_field_removes_from_both(storage: HybridStorageManager) -> None:
     uid = "u7"
 
     # Large array (HDF5 + sentinel)
-    large_arr = np.random.randn(100, 100).astype(np.float32)
+    large_arr = _large_array()
     storage.set_field(uid, "large", large_arr)
     storage.erase_field(uid, "large")
     assert not storage.has_field(uid, "large")
@@ -173,7 +172,7 @@ def test_erase_obj_cleans_both_backends(storage: HybridStorageManager) -> None:
     uid = "u9"
 
     storage.set_field(uid, "small", {"a": 1})
-    storage.set_field(uid, "large", np.random.randn(100, 100).astype(np.float32))
+    storage.set_field(uid, "large", _large_array())
     storage.heavy.set_field(uid, "hdf5_only", np.array([1, 2]))
 
     storage.erase_obj(uid)
@@ -187,7 +186,7 @@ def test_erase_obj_cleans_both_backends(storage: HybridStorageManager) -> None:
 def test_erase_field_for_all_clears_both(storage: HybridStorageManager) -> None:
     """erase_field_for_all should remove field from both backends."""
     storage.set_field("a", "target", {"x": 1})
-    storage.set_field("b", "target", np.random.randn(100, 100).astype(np.float32))
+    storage.set_field("b", "target", _large_array())
     storage.heavy.set_field("c", "target", np.array([1]))
 
     storage.erase_field_for_all("target")
@@ -200,7 +199,7 @@ def test_erase_field_for_all_clears_both(storage: HybridStorageManager) -> None:
 def test_clear_empties_both_backends(storage: HybridStorageManager) -> None:
     """clear should remove all data from both backends."""
     storage.set_field("x", "f1", 1)
-    storage.set_field("y", "f2", np.random.randn(100, 100).astype(np.float32))
+    storage.set_field("y", "f2", _large_array())
 
     storage.clear()
 
@@ -217,12 +216,12 @@ def test_context_manager_returns_self(storage: HybridStorageManager) -> None:
     assert storage.get_field("ctx_test", "f") == 1
 
 
-def test_batch_context_defers_writes(tmpdir: str) -> None:
+def test_batch_context_defers_writes(temp_dir: Path) -> None:
     """Batch context should commit writes on exit."""
-    light = SQLiteStorageManager(path=os.path.join(tmpdir, "batch.db"))
+    light = SQLiteStorageManager(path=str(temp_dir / "batch.db"))
     light.connect()
     heavy = HDF5StorageManager(
-        path=os.path.join(tmpdir, "batch.h5"),
+        path=str(temp_dir / "batch.h5"),
         swmr=False,
         keep_file_open=False,
     )
@@ -241,4 +240,3 @@ def test_batch_context_defers_writes(tmpdir: str) -> None:
         assert hybrid.get_field("u", "f") == {"value": 1}
     finally:
         hybrid.close()
-

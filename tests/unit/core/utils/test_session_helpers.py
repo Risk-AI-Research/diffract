@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, Self
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
@@ -18,9 +18,6 @@ from diffract.session.namespaces.results.injester import (
     FieldIngester,
     FieldIngestionError,
 )
-
-if TYPE_CHECKING:
-    from diffract.core.data.nn.params.metadata import ParameterMetadata
 
 pytestmark = pytest.mark.unit
 
@@ -72,7 +69,7 @@ class MockParameterView:
             raise KeyError(uid)
         return self._proxies[uid]
 
-    def __enter__(self) -> "MockParameterView":
+    def __enter__(self) -> Self:
         self._context_entered = True
         return self
 
