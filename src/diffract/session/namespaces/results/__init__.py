@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Used when a configuration carries no [export] default_export_format.
+FALLBACK_EXPORT_FORMAT = "dict"
+
 
 class ResultsNamespace:
     """Results export and ingestion API for Session."""
@@ -48,6 +51,9 @@ class ResultsNamespace:
         results_exporter_factory: Callable[
             [tuple[str, ...], IParameterView, str], Any
         ] = Provide["export.result_exporter.provider"],
+        default_export_format: str | None = Provide[
+            "export.config.default_export_format"
+        ],
     ) -> None:
         self.__session_or_context = session_or_context
         self.__param_repo = parameter_repository
@@ -55,21 +61,43 @@ class ResultsNamespace:
         self.__kernel_registry = kernel_registry
         self.__parallel_context_factory = parallel_context_factory
         self.__results_exporter_factory = results_exporter_factory
+        self.__default_export_format = default_export_format
+
+    def _resolve_export_format(self, export_format: str | None) -> str:
+        """Resolve the export format for a call.
+
+        An explicit argument wins over the configured default.
+
+        Args:
+            export_format: Format named by the caller, or None to take the
+                configured default.
+
+        Returns:
+            The format to export in. A configuration carrying no
+            ``[export] default_export_format`` yields FALLBACK_EXPORT_FORMAT.
+        """
+        if export_format is not None:
+            return export_format
+        if self.__default_export_format is None:
+            return FALLBACK_EXPORT_FORMAT
+        return self.__default_export_format
 
     def export_metrics(
         self,
         *fields: str,
-        export_format: str = "dict",
+        export_format: str | None = None,
     ) -> Any:
         """Retrieve computation results for specified fields (metrics only).
 
         Args:
             *fields: Field names to retrieve.
             export_format: Output format - "dict", "json", "pandas", "polars", "list".
+                Defaults to the configured ``[export] default_export_format``.
 
         Returns:
             Metric results in the specified format.
         """
+        export_format = self._resolve_export_format(export_format)
         with self.__session_or_context:
             if not fields:
                 raise ValueError("At least one field must be specified")
@@ -97,17 +125,19 @@ class ResultsNamespace:
     def export_aggregates(
         self,
         *fields: str,
-        export_format: str = "dict",
+        export_format: str | None = None,
     ) -> Any:
         """Retrieve aggregation results for specified fields (aggregates only).
 
         Args:
             *fields: Field names to retrieve.
             export_format: Output format - "dict", "json", "pandas", "polars", "list".
+                Defaults to the configured ``[export] default_export_format``.
 
         Returns:
             Aggregation results in the specified format.
         """
+        export_format = self._resolve_export_format(export_format)
         with self.__session_or_context:
             if not fields:
                 raise ValueError("At least one field must be specified")
@@ -280,7 +310,7 @@ class ResultsNamespace:
         self,
         *fields: str,
         sources: str = "all",
-        export_format: str = "dict",
+        export_format: str | None = None,
         expand_contextual: bool = True,
     ) -> Any:
         """Unified export of metrics and aggregates.
@@ -293,12 +323,14 @@ class ResultsNamespace:
             *fields: Field names to retrieve.
             sources: Data sources to include - "metrics", "aggregates", or "all".
             export_format: Output format - "dict", "json", "pandas", "polars", "list".
+                Defaults to the configured ``[export] default_export_format``.
             expand_contextual: When True and sources="all", merge aggregate values
                 into parameter entries as contextual field names.
 
         Returns:
             Results in the specified format.
         """
+        export_format = self._resolve_export_format(export_format)
         if sources not in ("metrics", "aggregates", "all"):
             raise ValueError(
                 f"Invalid sources: {sources}. Use 'metrics', 'aggregates', or 'all'."
