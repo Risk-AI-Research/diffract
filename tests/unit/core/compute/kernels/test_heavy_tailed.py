@@ -37,6 +37,10 @@ def _tpl_sample(size: int = 2000, seed: int = 10) -> NDArray[np.float64]:
 
 
 def test_power_law_fit_recovers_pareto_alpha(ram_container) -> None:
+    """Pure Pareto(alpha=2.5, xmin=1): the exponent is recovered and the fitted
+    support starts at the generative xmin. The KS distance of a correct fit to
+    its own generative law is small — a bound of 0.05 is ~4x the spread observed
+    across seeds, so a fit that misses the law fails it."""
     from diffract.core.compute.kernels.heavy_tailed import power_law_fit
 
     esd = _pareto_sample(alpha=2.5, size=4000)
@@ -44,8 +48,31 @@ def test_power_law_fit_recovers_pareto_alpha(ram_container) -> None:
     pl_alpha, pl_esd_xmin, pl_ks = power_law_fit(esd)
 
     assert pl_alpha == pytest.approx(2.5, abs=0.2)
-    assert pl_esd_xmin >= 1.0
-    assert 0.0 <= pl_ks <= 1.0
+    assert pl_esd_xmin == pytest.approx(1.0, rel=0.05)
+    assert pl_ks < 0.05
+
+
+def test_power_law_fit_locates_the_tail_onset(ram_container) -> None:
+    """A Pareto tail grafted onto a lognormal body puts the true xmin (3.0)
+    strictly above the data minimum (~0.1). The fit must locate the tail onset
+    and exclude the body: an xmin left at min(esd) admits the lognormal bulk and
+    cannot recover the tail exponent. The xmin estimator is biased upward (it may
+    always cut deeper into the tail), so the tolerance follows the spread measured
+    across seeds rather than the point estimate."""
+    from diffract.core.compute.kernels.heavy_tailed import power_law_fit
+
+    rng = np.random.default_rng(0)
+    body = rng.lognormal(0.0, 0.6, 4000)
+    body = body[body < 3.0]
+    tail = 3.0 * (rng.pareto(1.5, 1500) + 1.0)
+    esd = np.concatenate([body, tail])
+
+    pl_alpha, pl_esd_xmin, pl_ks = power_law_fit(esd)
+
+    assert pl_esd_xmin == pytest.approx(3.0, rel=0.1)
+    assert pl_esd_xmin > 10.0 * float(esd.min())
+    assert pl_alpha == pytest.approx(2.5, abs=0.15)
+    assert pl_ks < 0.05
 
 
 def test_resolve_fit_method(ram_container, monkeypatch) -> None:
@@ -88,7 +115,7 @@ def test_fit_kernels_auto_uses_powerlaw_below_threshold(
 ) -> None:
     from diffract.core.compute.kernels import heavy_tailed as ht
 
-    def _fail(esd):  # noqa: ANN001, ANN202
+    def _fail(esd):
         msg = "auto must not pick diffract below the threshold"
         raise AssertionError(msg)
 
@@ -249,8 +276,8 @@ def test_diffract_fit_handles_degenerate_data(ram_container) -> None:
 def test_diffract_truncated_power_law_fit_recovers_parameters(ram_container) -> None:
     """The TPL fit is a maximum-likelihood estimate; on synthetic
     TPL(alpha=2.5, lambda=0.1) data both parameters must be recovered
-    away from their bounds (the KS objective used to collapse lambda
-    to MIN_LAMBDA)."""
+    away from their bounds — lambda in particular must not collapse onto
+    MIN_LAMBDA."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import (
         truncated_power_law_fit_diffract_implementation,
@@ -289,8 +316,8 @@ def test_diffract_fit_matches_powerlaw_on_body_tail_data(ram_container) -> None:
 
 @pytest.mark.slow
 def test_diffract_exponential_fit_survives_large_shift(ram_container) -> None:
-    """Shifted-form CDFs: lambda*xmin ~ 4000 used to underflow f32 and
-    return an all-NaN fit."""
+    """Shifted-form CDFs: at lambda*xmin ~ 4000 the f32 evaluation stays in
+    range, so the fit must come back finite."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import exponential_fit
 
@@ -309,9 +336,9 @@ def test_diffract_fit_rejects_empty_data_without_poisoning_runtime(
 ) -> None:
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import (
+        _get_fit_class,
         power_law_fit_diffract_implementation,
     )
-    from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
 
     with pytest.raises(ValueError, match="empty"):
         _get_fit_class()(np.array([]), "power_law")
@@ -325,7 +352,7 @@ def test_diffract_fit_rejects_empty_data_without_poisoning_runtime(
 
 @pytest.mark.slow
 def test_diffract_fit_raises_after_close(ram_container) -> None:
-    """Using a closed Fit used to segfault the process; it must raise."""
+    """A closed Fit must raise rather than reach freed native memory."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
 
@@ -342,7 +369,8 @@ def test_diffract_fit_raises_after_close(ram_container) -> None:
 
 @pytest.mark.slow
 def test_diffract_fit_rejects_invalid_input(ram_container) -> None:
-    """Inf values and 2-D input used to produce confident garbage fits."""
+    """Inf values and 2-D input are rejected at construction, so no fit can
+    report confident parameters for them."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
 
@@ -375,8 +403,8 @@ def test_diffract_fit_is_scale_invariant(ram_container) -> None:
         assert xmin == pytest.approx(base_xmin * scale, rel=1e-2)
         assert ks == pytest.approx(base_ks, abs=1e-3)
 
-    # lambda_true = 2e-5 sits far below the (normalized-units) 1e-4 floor;
-    # this fit used to come back all-NaN.
+    # lambda_true = 2e-5 sits far below the (normalized-units) 1e-4 floor,
+    # so the fit must still return finite parameters.
     rng = np.random.default_rng(15)
     exp_esd = (1.0 + rng.exponential(0.05, 4000)) * 1e6
     expon_lambda, expon_xmin, _ = exponential_fit(exp_esd, fit_method="diffract")
@@ -386,8 +414,9 @@ def test_diffract_fit_is_scale_invariant(ram_container) -> None:
 
 @pytest.mark.slow
 def test_diffract_truncated_power_law_fit_survives_large_scale(ram_container) -> None:
-    """At data scale 1e4 the true lambda is 1e-5; the fit used to converge
-    on the bounds-penalty plateau and return alpha pinned at ~1."""
+    """At data scale 1e4 the true lambda is 1e-5, far below the parameter
+    floor; the fit must still recover alpha rather than settle on the
+    bounds-penalty plateau with alpha pinned at ~1."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import (
         truncated_power_law_fit_diffract_implementation,
@@ -405,8 +434,8 @@ def test_diffract_truncated_power_law_fit_survives_large_scale(ram_container) ->
 
 @pytest.mark.slow
 def test_diffract_tpl_p_value_survives_alpha_near_one(ram_container) -> None:
-    """alpha ~ 1 used to overflow the f32 power-law proposal into inf
-    draws; the exponential proposal must take over (acceptance-ratio
+    """At alpha ~ 1 the f32 power-law proposal would overflow into inf
+    draws, so the exponential proposal must take over (acceptance-ratio
     rule) and keep the bootstrap finite."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
@@ -431,7 +460,7 @@ def test_diffract_tpl_p_value_survives_alpha_near_one(ram_container) -> None:
 
 @pytest.mark.slow
 def test_diffract_set_params_is_atomic(ram_container) -> None:
-    """A rejected set_params call used to wipe the previous parameters."""
+    """A rejected set_params call must leave the previous parameters intact."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
 
@@ -462,7 +491,7 @@ def test_diffract_fit_pools_are_reused_and_history_independent(ram_container) ->
     data_a = _pareto_sample(alpha=2.5, size=3000, seed=18)
     data_b = _pareto_sample(alpha=2.0, size=2500, seed=19)  # same 4096 bucket
 
-    def fit_of(data):  # noqa: ANN001, ANN202
+    def fit_of(data):
         fit = accelerated.Fit(data, "power_law")
         try:
             params = dict(fit.fit_params())
@@ -493,8 +522,8 @@ def test_diffract_fit_pools_are_reused_and_history_independent(ram_container) ->
 
 @pytest.mark.slow
 def test_diffract_fit_does_not_leak_memory_across_instances(ram_container) -> None:
-    """Each Fit used to recompile its kernels and keep ~2 MB of compiled
-    artifacts forever; pooled fields keep repeated fits allocation-free."""
+    """Kernels compile once per process and fields are pooled, so repeated
+    Fit instances must not accumulate compiled artifacts."""
     _skip_without_taichi(ram_container)
     resource = pytest.importorskip("resource")
 
@@ -514,16 +543,16 @@ def test_diffract_fit_does_not_leak_memory_across_instances(ram_container) -> No
     after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     # ru_maxrss is bytes on macOS and KiB on Linux; either way the growth
-    # must stay far below the ~80 MB the old per-instance compilation
-    # leaked over 40 cycles.
+    # over 40 cycles must stay far below the ~2 MB of compiled artifacts a
+    # single per-instance compilation would retain.
     growth_mb = (after - before) / (1024 * 1024 if sys.platform == "darwin" else 1024)
     assert growth_mb < 30
 
 
 @pytest.mark.slow
 def test_diffract_set_params_validates_values(ram_container) -> None:
-    """Inconsistent injected parameters (tail_size > n) used to produce a
-    silently meaningless (True, 1.0) plausibility verdict."""
+    """Inconsistent injected parameters (tail_size > n) must be rejected
+    rather than yield a meaningless (True, 1.0) plausibility verdict."""
     _skip_without_taichi(ram_container)
     from diffract.core.compute.kernels.heavy_tailed import _get_fit_class
 
@@ -581,12 +610,44 @@ def test_diffract_fit_is_faster_than_powerlaw(ram_container) -> None:
 
 
 def test_fit_kernels_reject_unknown_method(ram_container) -> None:
-    from diffract.core.compute.kernels.heavy_tailed import power_law_fit
+    from diffract.core.compute.kernels.heavy_tailed import (
+        exponential_fit,
+        power_law_fit,
+        truncated_power_law_fit,
+    )
 
     esd = _pareto_sample(alpha=3.0, size=100, seed=2)
 
-    with pytest.raises(ValueError, match="powerlaw"):
-        power_law_fit(esd, fit_method="taichi")  # type: ignore[arg-type]
+    for fit in (power_law_fit, truncated_power_law_fit, exponential_fit):
+        with pytest.raises(ValueError, match="not implemented"):
+            fit(esd, fit_method="taichi")  # type: ignore[arg-type]
+
+
+def test_explicit_diffract_without_taichi_fails_loudly(ram_container) -> None:
+    """Explicitly requesting the accelerated path when the taichi extra is
+    absent must fail loudly and name the extra to install, never silently
+    fall back (the fit kernels and the p-value functions share one gate)."""
+    import diffract.core.utils.imports as import_utils
+    from diffract.core.compute.kernels import heavy_tailed as ht
+
+    if import_utils.is_available("taichi"):
+        pytest.skip("taichi extra installed; the missing-extra path is not exercised")
+
+    esd = _pareto_sample(alpha=2.5, size=200, seed=2)
+
+    # The error must name the exact extra to install, per the
+    # optional-dependency contract (not merely mention taichi somewhere).
+    for fit in (ht.power_law_fit, ht.truncated_power_law_fit, ht.exponential_fit):
+        with pytest.raises(ModuleNotFoundError, match=r"diffract-core\[taichi\]"):
+            fit(esd, fit_method="diffract")
+
+    for p_value, args in (
+        (ht.pl_p_value, (esd, 2.5, 1.0, 0.05)),
+        (ht.tpl_p_value, (esd, 2.5, 0.1, 1.0, 0.05)),
+        (ht.expon_p_value, (esd, 0.1, 1.0, 0.05)),
+    ):
+        with pytest.raises(ModuleNotFoundError, match=r"diffract-core\[taichi\]"):
+            p_value(*args)
 
 
 def test_session_resolves_heavy_tailed_chain(ram_container) -> None:
@@ -612,3 +673,73 @@ def test_session_resolves_heavy_tailed_chain(ram_container) -> None:
     fields = scalars[meta.uid]["fields"]
     assert np.isfinite(fields["pl_ks"])
     assert 0.0 <= fields["expon_concentration"] <= 1.0
+
+
+def test_ht_presence_is_tail_width_fraction() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_presence
+
+    assert ht_presence(esd_min=1.0, esd_max=10.0, ht_esd_xmin=4.0) == pytest.approx(
+        6.0 / 9.0
+    )
+
+
+def test_ht_presence_propagates_nan_xmin() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_presence
+
+    assert np.isnan(ht_presence(esd_min=1.0, esd_max=10.0, ht_esd_xmin=float("nan")))
+
+
+def test_ht_presence_is_nan_on_zero_width() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_presence
+
+    assert np.isnan(ht_presence(esd_min=5.0, esd_max=5.0, ht_esd_xmin=5.0))
+
+
+def test_ht_scale_is_max_times_lambda() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_scale
+
+    assert ht_scale(esd_max=8.0, ht_lambda=0.1) == pytest.approx(0.8)
+
+
+def test_ht_scale_propagates_nan() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_scale
+
+    # A degenerate fit returns lambda = nan (BAD_RESULT); an inf-corrupted
+    # checkpoint gives esd_max = nan. Either operand carries the nan through
+    # instead of swallowing it into a plausible number.
+    assert np.isnan(ht_scale(esd_max=8.0, ht_lambda=float("nan")))
+    assert np.isnan(ht_scale(esd_max=float("nan"), ht_lambda=0.1))
+
+
+def test_ht_presence_propagates_nan_esd_bounds() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_presence
+
+    # An inf-corrupted checkpoint gives an all-nan spectrum (esd_min = esd_max
+    # = nan); the width guard returns nan rather than dividing into a warning.
+    nan = float("nan")
+    assert np.isnan(ht_presence(esd_min=nan, esd_max=nan, ht_esd_xmin=3.0))
+
+
+def test_ht_concentration_is_tail_size_fraction() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_concentration
+
+    esd = np.array([0.5, 1.0, 2.0, 3.0, 4.0])
+    # xmin = 2.0 -> {2.0, 3.0, 4.0} = 3 of 5 entries sit in the tail.
+    assert ht_concentration(esd, 2.0) == pytest.approx(3.0 / 5.0)
+
+
+def test_ht_concentration_propagates_nan_xmin() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_concentration
+
+    # A failed / no-valid fit returns xmin = nan; the tail fraction must carry
+    # the nan through instead of counting zero tail entries and reporting a
+    # plausible 0.0.
+    assert np.isnan(ht_concentration(np.array([1.0, 2.0, 3.0]), float("nan")))
+
+
+def test_ht_concentration_propagates_nan_spectrum() -> None:
+    from diffract.core.compute.kernels.heavy_tailed import ht_concentration
+
+    # An inf-corrupted checkpoint yields an all-nan esd; the fraction propagates
+    # nan rather than silently reporting no tail.
+    assert np.isnan(ht_concentration(np.full(3, np.nan), 2.0))

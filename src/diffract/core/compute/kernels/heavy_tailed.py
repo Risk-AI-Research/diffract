@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 import diffract.core.utils.imports as import_utils
 from diffract.core.compute.decorator import kernel
+from diffract.core.compute.metadata import KernelInfo
 
 # Availability is probed without importing the accelerated module itself:
 # importing it initializes the taichi runtime, which must not happen (and
@@ -83,32 +84,79 @@ def _get_fit_class() -> Any:
 
 # region general
 
+# Display-formula templates for the stacked heavy-tailed summaries; each variant
+# substitutes its fit family (PL / TPL / E), which selects the cutoff and rate.
+_HT_CONC = r"\#\{i : \lambda_i \ge x_{\min}^{%s}\} / M"
+_HT_PRES = r"(\lambda_{\max} - x_{\min}^{%s}) / (\lambda_{\max} - \lambda_{\min})"
+_HT_SCALE = r"\lambda_{\max}\,\Lambda_{%s}"
 
-@kernel(name="pl_concentration", require_fields=("esd", "pl_esd_xmin"))
-@kernel(name="tpl_concentration", require_fields=("esd", "tpl_esd_xmin"))
-@kernel(name="expon_concentration", require_fields=("esd", "expon_esd_xmin"))
+
+@kernel(
+    name="pl_concentration",
+    require_fields=("esd", "pl_esd_xmin"),
+    info=KernelInfo(formula=_HT_CONC % r"\mathrm{PL}"),
+)
+@kernel(
+    name="tpl_concentration",
+    require_fields=("esd", "tpl_esd_xmin"),
+    info=KernelInfo(formula=_HT_CONC % r"\mathrm{TPL}"),
+)
+@kernel(
+    name="expon_concentration",
+    require_fields=("esd", "expon_esd_xmin"),
+    info=KernelInfo(formula=_HT_CONC % r"\mathrm{E}"),
+)
 def ht_concentration(esd: NDArray[np.floating[Any]], ht_esd_xmin: float) -> float:
-    """Compute heavy-tailed concentration (tail size / total size)."""
+    r"""Tail concentration :math:`\#\{i : \lambda_i \ge x_{\min}\} / M`."""
+    if np.isnan(ht_esd_xmin) or np.isnan(esd).any():
+        return float("nan")
+
     tail_size = cast("int", np.sum(esd >= ht_esd_xmin).item())
 
     return tail_size / esd.size
 
 
-@kernel(name="pl_presence", require_fields=("esd_min", "esd_max", "pl_esd_xmin"))
-@kernel(name="tpl_presence", require_fields=("esd_min", "esd_max", "tpl_esd_xmin"))
-@kernel(name="expon_presence", require_fields=("esd_min", "esd_max", "expon_esd_xmin"))
+@kernel(
+    name="pl_presence",
+    require_fields=("esd_min", "esd_max", "pl_esd_xmin"),
+    info=KernelInfo(formula=_HT_PRES % r"\mathrm{PL}"),
+)
+@kernel(
+    name="tpl_presence",
+    require_fields=("esd_min", "esd_max", "tpl_esd_xmin"),
+    info=KernelInfo(formula=_HT_PRES % r"\mathrm{TPL}"),
+)
+@kernel(
+    name="expon_presence",
+    require_fields=("esd_min", "esd_max", "expon_esd_xmin"),
+    info=KernelInfo(formula=_HT_PRES % r"\mathrm{E}"),
+)
 def ht_presence(esd_min: float, esd_max: float, ht_esd_xmin: float) -> float:
-    """Compute heavy-tailed presence (tail width / total width)."""
+    r"""Tail presence (tail width as a fraction of the spectrum width).
+
+    :math:`(\lambda_{\max} - x_{\min}) / (\lambda_{\max} - \lambda_{\min})`
+    """
     esd_width = esd_max - esd_min
     ht_width = esd_max - ht_esd_xmin
 
     return ht_width / esd_width if esd_width > 0 else float("nan")
 
 
-@kernel(name="tpl_scale", require_fields=("esd_max", "tpl_lambda"))
-@kernel(name="expon_scale", require_fields=("esd_max", "expon_lambda"))
+@kernel(
+    name="tpl_scale",
+    require_fields=("esd_max", "tpl_lambda"),
+    info=KernelInfo(formula=_HT_SCALE % r"\mathrm{TPL}"),
+)
+@kernel(
+    name="expon_scale",
+    require_fields=("esd_max", "expon_lambda"),
+    info=KernelInfo(formula=_HT_SCALE % r"\mathrm{E}"),
+)
 def ht_scale(esd_max: float, ht_lambda: float) -> float:
-    """Compute heavy-tailed scale (max * lambda)."""
+    r"""Tail scale (fit rate acting over the observed range).
+
+    :math:`\lambda_{\max}\,\Lambda`
+    """
     return esd_max * ht_lambda
 
 
@@ -162,8 +210,11 @@ def power_law_fit(
     *,
     fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float]:
-    """Fit power law distribution to ESD data.
+    r"""Fit a power law to the ESD tail via the Clauset-Shalizi-Newman MLE.
 
+    The exponent is the maximum-likelihood estimate
+    :math:`\hat{\alpha} = 1 + n_{\mathrm{tail}}\,\big/\sum_i \ln(\lambda_i / x_{\min})`,
+    with :math:`x_{\min}` chosen to minimise the Kolmogorov-Smirnov distance.
     `auto` uses the accelerated implementation when the taichi extra is
     installed and the ESD is large enough for it to fit at all.
     """
@@ -183,7 +234,10 @@ def power_law_fit(
 def pl_p_value(
     esd: NDArray[np.floating[Any]], pl_alpha: float, pl_esd_xmin: float, pl_ks: float
 ) -> float:
-    """Compute p-value for power law fit (requires the taichi extra)."""
+    r"""Bootstrap p-value for the power law fit (requires the taichi extra).
+
+    :math:`p = \Pr(D^* > D_{\mathrm{PL}})` over synthetic resamples.
+    """
     fit = _get_fit_class()(esd, "power_law")
     try:
         fit.set_params(
@@ -252,8 +306,10 @@ def truncated_power_law_fit(
     *,
     fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float, float]:
-    """Fit truncated power law distribution to ESD data.
+    r"""Fit a truncated power law to the ESD tail by maximum likelihood.
 
+    Model :math:`p(\lambda) \propto \lambda^{-\hat{\alpha}}\,e^{-\hat{\Lambda}\lambda}`
+    for :math:`\lambda \ge x_{\min}` (power law with an exponential cutoff).
     `auto` uses the accelerated implementation when the taichi extra is
     installed and the ESD is large enough for it to fit at all.
     """
@@ -277,7 +333,10 @@ def tpl_p_value(
     tpl_esd_xmin: float,
     tpl_ks: float,
 ) -> float:
-    """Compute p-value for truncated power law fit (requires the taichi extra)."""
+    r"""Bootstrap p-value for the truncated power law fit (requires the taichi extra).
+
+    :math:`p = \Pr(D^* > D_{\mathrm{TPL}})` over synthetic resamples.
+    """
     fit = _get_fit_class()(esd, "truncated_power_law")
     try:
         fit.set_params(
@@ -346,8 +405,10 @@ def exponential_fit(
     *,
     fit_method: FitMethod = "auto",
 ) -> tuple[float, float, float]:
-    """Fit exponential distribution to ESD data.
+    r"""Fit an exponential tail to the ESD by maximum likelihood.
 
+    MLE :math:`\hat{\Lambda} = 1 / (\langle\lambda\rangle_{\ge x_{\min}} - x_{\min})`
+    (the light-tailed contrast family for the power-law fits).
     `auto` uses the accelerated implementation when the taichi extra is
     installed and the ESD is large enough for it to fit at all.
     """
@@ -370,7 +431,10 @@ def expon_p_value(
     expon_esd_xmin: float,
     expon_ks: float,
 ) -> float:
-    """Compute p-value for exponential fit (requires the taichi extra)."""
+    r"""Bootstrap p-value for the exponential fit (requires the taichi extra).
+
+    :math:`p = \Pr(D^* > D_{\mathrm{E}})` over synthetic resamples.
+    """
     fit = _get_fit_class()(esd, "exponential")
     try:
         fit.set_params(

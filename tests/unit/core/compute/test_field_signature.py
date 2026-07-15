@@ -1,13 +1,13 @@
 import numpy as np
 
 from diffract.core.compute.config import KernelConfig
-from diffract.core.compute.field_signature import (
-    collect_field_catalog,
-    collect_field_signatures,
-)
 from diffract.core.compute.execution.enums import (
     KernelApplyLevel,
     KernelExecutionProtocol,
+)
+from diffract.core.compute.field_signature import (
+    collect_field_catalog,
+    collect_field_signatures,
 )
 from diffract.core.compute.metadata import KernelInfo
 from diffract.core.compute.registry import KernelRegistry

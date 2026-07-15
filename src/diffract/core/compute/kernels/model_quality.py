@@ -1,5 +1,5 @@
 import math
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -10,18 +10,27 @@ from diffract.core.compute.decorator import kernel
 
 @kernel
 def pl_alpha_weighted(esd_max: float, pl_alpha: float) -> float:
-    """Compute power law alpha weighted by log ESD max."""
-    return pl_alpha * math.log(esd_max)
+    r"""Alpha weighted by the log10 spectrum maximum.
+
+    :math:`\alpha_{\mathrm{PL}}\,\log_{10}\lambda_{\max}`
+    """
+    return pl_alpha * math.log10(esd_max)
 
 
 @kernel
-def rand_distance(
+def w1_rand_distance(
     esd: NDArray[np.floating[Any]], esd_rand: NDArray[np.floating[Any]]
 ) -> float:
-    """Compute Jensen-Shannon divergence between ESD and randomized ESD."""
-    avg = 0.5 * (esd + esd_rand)
-    divergence = 0.5 * (
-        cast("float", stats.entropy(esd, avg))
-        + cast("float", stats.entropy(esd_rand, avg))
-    )
-    return math.sqrt(divergence)
+    r"""Scale-invariant Wasserstein-1 distance from the ESD to its randomized null.
+
+    :math:`\mathcal{W}_1(\lambda, \lambda^{\mathrm{rand}}) / \langle\lambda\rangle` --
+    the earth-mover distance between the spectrum and its permutation null,
+    divided by the shared mean eigenvalue so the index is dimensionless and
+    comparable across layers of different scale.
+    """
+    mean = float(esd.mean())
+    if np.isnan(mean):
+        return float("nan")
+    if mean <= 0:
+        return 0.0
+    return float(stats.wasserstein_distance(esd, esd_rand) / mean)

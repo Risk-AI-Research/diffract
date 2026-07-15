@@ -6,6 +6,7 @@ from numpy.typing import NDArray
 
 import diffract.core.utils.imports as import_utils
 from diffract.core.compute.decorator import kernel
+from diffract.core.compute.metadata import KernelInfo
 
 torch = import_utils.optional_import("torch")
 TORCH_AVAILABLE = torch is not None
@@ -34,18 +35,27 @@ else:
         "weights_rand_svals",
         "weights_rand_rsvs",
     ),
+    info=KernelInfo(formula=r"W_{\mathrm{rand}} = U\Sigma V^\top"),
 )
 def svd(
     mat: NDArray[np.floating[Any]], *, allow_cuda: bool = True
 ) -> tuple[
     NDArray[np.floating[Any]], NDArray[np.floating[Any]], NDArray[np.floating[Any]]
 ]:
-    """Compute SVD decomposition of matrix."""
+    r"""Economy SVD :math:`W = U\Sigma V^\top` with ascending :math:`\sigma_i`."""
     if IS_CUDA_AVAILABLE and allow_cuda:
         svd_fn = functools.partial(torch.linalg.svd, full_matrices=False)
         u, svals, vt = torch_cuda_wrapper(mat, svd_fn)
     else:
-        u, svals, vt = np.linalg.svd(mat, full_matrices=False)
+        try:
+            u, svals, vt = np.linalg.svd(mat, full_matrices=False)
+        except np.linalg.LinAlgError:
+            # nan weights make gesdd fail to converge; mirror the inf path's
+            # all-nan spectrum so the nan contract holds downstream.
+            k = min(mat.shape)
+            u = np.full((mat.shape[0], k), np.nan)
+            svals = np.full(k, np.nan)
+            vt = np.full((k, mat.shape[1]), np.nan)
 
     svals = np.abs(svals.real).flatten()
     svals_argsort_index = np.argsort(svals)
@@ -58,11 +68,17 @@ def svd(
 
 
 @kernel(name="esd", require_fields=("weights_svals", "greater_dim"))
-@kernel(name="esd_rand", require_fields=("weights_rand_svals", "greater_dim"))
+@kernel(
+    name="esd_rand",
+    require_fields=("weights_rand_svals", "greater_dim"),
+    info=KernelInfo(
+        formula=r"\lambda_i^{\mathrm{rand}} = (\sigma_i^{\mathrm{rand}})^2 / N"
+    ),
+)
 def esd(
     svals: NDArray[np.floating[Any]], greater_dim: int
 ) -> NDArray[np.floating[Any]]:
-    """Compute empirical spectral distribution from singular values."""
+    r"""Empirical spectral distribution :math:`\lambda_i = \sigma_i^2 / N`."""
     result = np.square(svals) / greater_dim
     return cast("NDArray[np.floating[Any]]", result)
 
@@ -71,30 +87,54 @@ def esd(
 
 
 @kernel(name="max_weights_sval", require_fields=("weights_svals",))
-@kernel(name="max_weights_rand_sval", require_fields=("weights_rand_svals",))
+@kernel(
+    name="max_weights_rand_sval",
+    require_fields=("weights_rand_svals",),
+    info=KernelInfo(
+        formula=r"\sigma_{\max}^{\mathrm{rand}} = \max_i \sigma_i^{\mathrm{rand}}"
+    ),
+)
 def max_sval(svals: NDArray[np.floating[Any]]) -> float:
-    """Get maximum singular value."""
+    r"""Maximum singular value :math:`\sigma_{\max} = \max_i \sigma_i`."""
     return cast("float", svals[-1].item())
 
 
 @kernel(name="min_weights_sval", require_fields=("weights_svals",))
-@kernel(name="min_weights_rand_sval", require_fields=("weights_rand_svals",))
+@kernel(
+    name="min_weights_rand_sval",
+    require_fields=("weights_rand_svals",),
+    info=KernelInfo(
+        formula=r"\sigma_{\min}^{\mathrm{rand}} = \min_i \sigma_i^{\mathrm{rand}}"
+    ),
+)
 def min_sval(svals: NDArray[np.floating[Any]]) -> float:
-    """Get minimum singular value."""
+    r"""Minimum singular value :math:`\sigma_{\min} = \min_i \sigma_i`."""
     return cast("float", svals[0].item())
 
 
 @kernel(name="esd_max", require_fields=("esd",))
-@kernel(name="esd_rand_max", require_fields=("esd_rand",))
+@kernel(
+    name="esd_rand_max",
+    require_fields=("esd_rand",),
+    info=KernelInfo(
+        formula=r"\lambda_{\max}^{\mathrm{rand}} = \max_i \lambda_i^{\mathrm{rand}}"
+    ),
+)
 def esd_max(esd: NDArray[np.floating[Any]]) -> float:
-    """Get maximum ESD value."""
+    r"""Maximum ESD eigenvalue :math:`\lambda_{\max} = \max_i \lambda_i`."""
     return cast("float", esd[-1].item())
 
 
 @kernel(name="esd_min", require_fields=("esd",))
-@kernel(name="esd_rand_min", require_fields=("esd_rand",))
+@kernel(
+    name="esd_rand_min",
+    require_fields=("esd_rand",),
+    info=KernelInfo(
+        formula=r"\lambda_{\min}^{\mathrm{rand}} = \min_i \lambda_i^{\mathrm{rand}}"
+    ),
+)
 def esd_min(esd: NDArray[np.floating[Any]]) -> float:
-    """Get minimum ESD value."""
+    r"""Minimum ESD eigenvalue :math:`\lambda_{\min} = \min_i \lambda_i`."""
     return cast("float", esd[0].item())
 
 

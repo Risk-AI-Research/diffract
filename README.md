@@ -6,7 +6,8 @@
 [![Docs](https://img.shields.io/badge/docs-github.io-blue)](https://risk-ai-research.github.io/diffract/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Official library of ["Diffract: Spectral View of LLM Domain Adaptation"](https://openreview.net/forum?id=XBUHoiAGDE)
+Official library of
+["Diffract: Spectral View of LLM Domain Adaptation"](https://openreview.net/forum?id=XBUHoiAGDE)
 (**ICML 2026 Oral**).
 
 Diffract is a Python package for analyzing deep neural network weights and tracking
@@ -34,10 +35,9 @@ pip install "diffract-core[taichi]"      # + accelerated heavy-tailed fits and p
 pip install "diffract-core[all]"         # torch + viz + taichi + pandas/polars exports
 ```
 
-Further extras: `frameworks` (TensorFlow, Flax, ONNX), `pandas` / `polars`
-(DataFrame exports), `zarr` (cloud storage), `redis` (shared cache),
-`notebooks` (tooling for the example notebooks). The quotes around
-`"diffract-core[...]"` matter in zsh.
+Further extras: `frameworks` (TensorFlow, Flax, ONNX), `pandas` / `polars` (DataFrame
+exports), `zarr` (cloud storage), `redis` (shared cache), `notebooks` (tooling for the
+example notebooks). The quotes around `"diffract-core[...]"` matter in zsh.
 
 ### Development Install
 
@@ -111,6 +111,7 @@ internal structure:
   HDF5, SQLite, Zarr, and hybrid backends.
 
 - **Kernel Apply Levels**: Kernels can work at multiple levels:
+
   - **PARAMETER** - Operate on individual weight matrices.
   - **IN_MODEL** - Aggregate within a single model.
   - **CROSS_MODEL** - Compare or aggregate across models.
@@ -136,7 +137,9 @@ session = Session()
 
 with session:
     session.models.add(torch_model)  # torch.nn.Module
-    session.models.add(torch_state_dict, model_id="checkpoint")  # Dict[str, torch.Tensor]
+    session.models.add(
+        torch_state_dict, model_id="checkpoint"
+    )  # Dict[str, torch.Tensor]
     session.models.add(numpy_weights, model_id="raw-weights")  # Dict[str, np.ndarray]
     session.models.add(onnx_model, model_id="onnx-model")  # onnx.ModelProto
     session.models.add(flax_model, model_id="flax-model")  # flax.linen.Module
@@ -151,6 +154,10 @@ Dependencies are resolved automatically:
 session.compute.apply("frob_norm", "stable_rank")
 session.compute.apply("pl_ks")  # has many dependencies—all resolved automatically
 ```
+
+Every built-in metric—its formula, apply level, required inputs, and configuration—is
+catalogued in the
+[metrics reference](https://risk-ai-research.github.io/diffract/reference/metrics/).
 
 ### Filtering Parameters
 
@@ -188,9 +195,7 @@ Export results in various formats (`pandas`, `polars`, `dict`, `json`, or `list`
 
 ```python
 scalars_df = session.results.export_metrics("stable_rank", export_format="pandas")
-aggregates_df = session.results.export_aggregates(
-    "stable_rank", export_format="pandas"
-)
+aggregates_df = session.results.export_aggregates("stable_rank", export_format="pandas")
 
 # Other formats work the same way
 results = session.results.export_metrics("stable_rank", export_format="polars")
@@ -230,7 +235,7 @@ List and configure kernels at runtime:
 ```python
 session.compute.list_available_kernels(verbose=True)
 session.compute.list_available_metrics(verbose=True)
-session.compute.configure_kernel("hard_rank", threshold=1e-6)
+session.compute.configure_kernel("hard_rank", rtol=1e-6)
 ```
 
 ### Session Management
@@ -281,8 +286,11 @@ You can also override the registered name and output fields:
 
 ```python
 with session:
+
     @session.compute.kernel(name="scaled_metric", produce_fields=["scaled_result"])
-    def custom_analysis(frob_norm: float, stable_rank: float, *, weight: float = 0.5) -> float:
+    def custom_analysis(
+        frob_norm: float, stable_rank: float, *, weight: float = 0.5
+    ) -> float:
         """Custom analysis combining multiple metrics."""
         return weight * frob_norm + (1 - weight) * stable_rank
 ```
@@ -327,9 +335,9 @@ Diffract offers built-in **profiles** for common setups:
 from diffract import Session
 
 # Use a profile (recommended for most users)
-session = Session(profile="ram")      # fast, temporary
-session = Session(profile="local")    # persistent, simple
-session = Session(profile="hybrid")   # persistent, optimized for large arrays
+session = Session(profile="ram")  # fast, temporary
+session = Session(profile="local")  # persistent, simple
+session = Session(profile="hybrid")  # persistent, optimized for large arrays
 
 # Or use a custom config file for full control
 session = Session(config_path="my_config.ini")
@@ -376,9 +384,9 @@ max_workers = 4
 ## 📚 Documentation
 
 The documentation is hosted at
-[risk-ai-research.github.io/diffract](https://risk-ai-research.github.io/diffract/).
-It is sourced from `docs/` and built with Sphinx + MyST; `uv sync --extra docs`
-and `make docs` render the HTML locally.
+[risk-ai-research.github.io/diffract](https://risk-ai-research.github.io/diffract/). It
+is sourced from `docs/` and built with Sphinx + MyST; `uv sync --extra docs` and
+`make docs` render the HTML locally.
 
 <br>
 
@@ -400,8 +408,8 @@ If you use Diffract or build on the paper, please cite:
 
 ## Contributions
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
-development setup, the checks CI runs, and the design principles.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the development
+setup, the checks CI runs, and the design principles.
 
 <br>
 
