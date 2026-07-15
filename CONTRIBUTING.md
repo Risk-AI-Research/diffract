@@ -75,6 +75,10 @@ make test        # full suite; some integration tests skip unless the
 make docs        # sphinx build
 ```
 
+The coverage gate (`fail_under` in `pyproject.toml`) is a ratchet: it only
+ever moves up. Raise it when a change lifts measured coverage; never lower it
+to make a change pass — add the missing tests instead.
+
 ## Conventions
 
 - Python code blocks in the README run as tests in CI — keep them
