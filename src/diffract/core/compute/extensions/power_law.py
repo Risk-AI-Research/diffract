@@ -28,6 +28,15 @@ with the CPU backend: Metal lacks the f64 arithmetic and the field
 lifecycle this module needs, and the workload is too branchy and too
 small for CUDA to pay off.
 
+Initializing that runtime enables flush-to-zero on the calling thread, a
+CPU control-register flag that would round subnormal results to zero for
+every later floating-point operation in the process -- squared singular
+values of a small-magnitude layer live in exactly that range. The runtime
+is therefore initialized inside
+:func:`~diffract.core.utils.fpenv.preserved_fp_environment`, which restores
+the flags afterwards; the fitted parameters are unchanged by this, since
+the kernels themselves do not rely on flush-to-zero.
+
 Taichi fields are pooled process-wide by data size padded to a power of
 two, and the kernels are module-level functions templated on those pooled
 fields. A process that runs thousands of fits therefore compiles each
@@ -50,10 +59,12 @@ from typing import Any, Literal
 import numpy as np
 
 import diffract.core.utils.imports as import_utils
+from diffract.core.utils.fpenv import preserved_fp_environment
 
 ti = import_utils.require("taichi")
 
-ti.init(arch=ti.cpu)
+with preserved_fp_environment():
+    ti.init(arch=ti.cpu)
 
 # params bounds
 MIN_ALPHA = 1.0
@@ -757,7 +768,7 @@ class Fit:
         try:  # noqa: SIM105
             self.close()
         except Exception:  # noqa: BLE001, S110
-            pass
+            pass  # nosec B110 - releases pooled taichi fields; __del__ must not raise
 
     def fit_params(self):  # noqa: ANN201
         """Fit the distribution, selecting xmin by global KS minimum.
