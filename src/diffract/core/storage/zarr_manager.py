@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import pickle
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -26,11 +25,9 @@ from diffract.core.utils.exceptions import format_exception_message
 from .base_manager import BaseStorageManager
 from .interface import DEFAULT_TABLE, UID
 from .metadata import infer_value_metadata
+from .serialization import decode_value, encode_value
 
-# Storage type markers for serialization
 _TYPE_NDARRAY = "ndarray"
-_TYPE_JSON = "json"
-_TYPE_PICKLE = "pickle"
 
 _READONLY_ERROR = "ZarrStorageManager is readonly; write operation is not allowed"
 
@@ -72,7 +69,7 @@ else:
             <root>/<table>/<field_name>/<obj_uid>
 
         Each value is stored as a Zarr array with attributes:
-            - type: "ndarray" | "json" | "pickle"
+            - type: "ndarray" | "json" | "bytes"
             - value_meta: JSON string from infer_value_metadata(...)
         """
 
@@ -476,15 +473,7 @@ else:
 
                 if kind == _TYPE_NDARRAY:
                     return arr[()]
-                if kind == _TYPE_JSON:
-                    payload = bytes(arr[:]).decode("utf-8")
-                    return json.loads(payload)
-                if kind == _TYPE_PICKLE:
-                    payload = bytes(arr[:])
-                    return pickle.loads(payload)  # noqa: S301
-
-                msg = f"Unknown stored type: {kind}"
-                raise ValueError(msg)  # noqa: TRY301
+                return decode_value(bytes(arr[:]), kind)
             except KeyError:
                 raise
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -605,24 +594,12 @@ else:
                 )
                 return arr, _TYPE_NDARRAY
 
-            if isinstance(value, np.generic):
-                value = value.item()
-
-            try:
-                payload = json.dumps(value, ensure_ascii=False).encode("utf-8")
-                data = np.frombuffer(payload, dtype=np.uint8)
-                arr = field_group.create_array(
-                    enc_uid, data=data, chunks=(len(data),), overwrite=True
-                )
-            except (TypeError, ValueError):
-                payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-                data = np.frombuffer(payload, dtype=np.uint8)
-                arr = field_group.create_array(
-                    enc_uid, data=data, chunks=(len(data),), overwrite=True
-                )
-                return arr, _TYPE_PICKLE
-            else:
-                return arr, _TYPE_JSON
+            payload, tag = encode_value(value)
+            data = np.frombuffer(payload, dtype=np.uint8)
+            arr = field_group.create_array(
+                enc_uid, data=data, chunks=(len(data),), overwrite=True
+            )
+            return arr, tag
 
         def _flush_set_field_batch(self) -> None:
             if not self._set_field_batch:

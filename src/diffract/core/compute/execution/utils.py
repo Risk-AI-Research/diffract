@@ -11,7 +11,7 @@ provides uniform error handling across all execution modes.
 from __future__ import annotations
 
 import marshal
-import pickle
+import pickle  # nosec B403 - closure round-trip only; see unmarshal_kernel
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -63,15 +63,25 @@ def unmarshal_kernel(serialized: bytes) -> Callable[..., Any]:
 
     Returns:
         Reconstructed function object.
+
+    Note:
+        The accepted bytes are always the output of :func:`marshal_kernel` in
+        the submitting process: they are built from a registered kernel object,
+        passed straight to a worker of the process pool this library owns, and
+        never read from disk, cache, or the network.
     """
-    kernel_code, kernel_defaults, kernel_closure = marshal.loads(serialized)  # noqa: S302
-    kernel_closure = (
-        pickle.loads(kernel_closure)  # noqa: S301
-        if kernel_closure
-        else None
+    parts = marshal.loads(  # noqa: S302 # nosec B302 - marshal_kernel bytes, in-process
+        serialized,
     )
-    if kernel_closure:
-        kernel_closure = tuple(types.CellType(obj) for obj in kernel_closure)
+    kernel_code, kernel_defaults, kernel_closure_bytes = parts
+
+    kernel_closure = None
+    if kernel_closure_bytes:
+        cells = pickle.loads(  # noqa: S301 # nosec B301 - closure from marshal_kernel
+            kernel_closure_bytes,
+        )
+        kernel_closure = tuple(types.CellType(obj) for obj in cells)
+
     return types.FunctionType(
         code=kernel_code,
         globals=globals(),

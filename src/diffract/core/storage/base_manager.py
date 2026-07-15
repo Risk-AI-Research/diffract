@@ -1,5 +1,3 @@
-import json
-import pickle
 import threading
 from abc import abstractmethod
 from contextlib import suppress
@@ -9,6 +7,7 @@ from typing import Any, Self
 import numpy as np
 
 from diffract.core.storage.interface import DEFAULT_TABLE, UID, IStorageManager
+from diffract.core.storage.serialization import encode_value
 
 
 class BaseStorageManager(IStorageManager):
@@ -18,13 +17,11 @@ class BaseStorageManager(IStorageManager):
         self,
         batch_size_limit_bytes: int = 50 * 1024 * 1024,
         batch_soft_limit_ratio: float = 0.9,
-        use_json: bool = True,
     ) -> None:
         self._batch_size_limit_bytes = batch_size_limit_bytes
         self._batch_soft_limit_bytes = int(
             batch_size_limit_bytes * batch_soft_limit_ratio
         )
-        self._use_json = use_json
 
         self._pending_set_bytes: int = 0
         # Keys are (table, obj_uid, field_name)
@@ -221,10 +218,9 @@ class BaseStorageManager(IStorageManager):
         """Best-effort estimate of serialized size in bytes."""
         if isinstance(value, np.ndarray):
             return int(value.nbytes)
-        if self._use_json:
-            with suppress(TypeError, ValueError):
-                return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
-        return len(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+        with suppress(TypeError, ValueError):
+            return len(encode_value(value)[0])
+        return len(repr(value).encode("utf-8"))
 
     @property
     def _in_batch_context(self) -> bool:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import pickle
 import time
 
 import numpy as np
@@ -18,7 +17,7 @@ REDIS_PORT = int(os.getenv("TEST_REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))  # use isolated DB by default
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def cache() -> RedisLRUCacheManager:
     try:
         cache = RedisLRUCacheManager(
@@ -48,6 +47,9 @@ class Foo:
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Foo) and other.x == self.x
 
+    def __hash__(self) -> int:
+        return hash(self.x)
+
 
 def test_set_get_simple_value(cache: RedisLRUCacheManager) -> None:
     uid = "obj-1"
@@ -75,7 +77,8 @@ def test_numpy_array_roundtrip(cache: RedisLRUCacheManager) -> None:
     uid = "obj-3"
     field = "weights"
 
-    arr = np.random.randn(128, 64).astype(np.float32)
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((128, 64)).astype(np.float32)
     cache.set_field(uid, field, arr)
 
     got = cache.get_field(uid, field)
@@ -160,11 +163,34 @@ def test_ram_only_settings(cache: RedisLRUCacheManager) -> None:
     assert info_save.get("save", "") == ""
 
 
-def test_pickle_compatibility(cache: RedisLRUCacheManager) -> None:
-    obj = Foo(7)
-    cache.set_field("o", "foo", obj)
-    got = cache.get_field("o", "foo")
-    assert got == obj
+def test_rejects_non_serializable_value(cache: RedisLRUCacheManager) -> None:
+    with pytest.raises(ValueError):
+        cache.set_field("o", "custom", Foo(7))
+
+    with pytest.raises(ValueError):
+        cache.set_field("o", "nested", {"weights": np.zeros(3)})
+
+    assert cache.has_field("o", "custom") is False
+    assert cache.has_field("o", "nested") is False
+
+    arr = np.arange(6, dtype=np.float32).reshape(2, 3)
+    cache.set_field("o", "arr", arr)
+    got_arr = cache.get_field("o", "arr")
+    assert isinstance(got_arr, np.ndarray)
+    assert got_arr.dtype == arr.dtype
+    assert got_arr.shape == arr.shape
+    assert np.array_equal(got_arr, arr)
+
+    mapping = {"a": 1, "b": [1, 2, 3]}
+    cache.set_field("o", "map", mapping)
+    assert cache.get_field("o", "map") == mapping
+
+    cache.set_field("o", "scalar", 3.5)
+    assert cache.get_field("o", "scalar") == 3.5
+
+    raw = b"\x00\x01\x02"
+    cache.set_field("o", "raw", raw)
+    assert cache.get_field("o", "raw") == raw
 
 
 @pytest.mark.slow

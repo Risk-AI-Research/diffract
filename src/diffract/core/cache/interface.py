@@ -70,9 +70,11 @@ class ICacheManager(Protocol):
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to store.
-            value: Value to cache (must be pickle-serializable).
+            value: Value to cache. Must be a numpy array, a JSON-serializable
+                value, or bytes.
 
         Raises:
+            ValueError: If the value is not a supported kind.
             Exception: If storage operation fails.
         """
         ...

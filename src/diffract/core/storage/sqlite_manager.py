@@ -9,12 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import pickle
 import sqlite3
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import closing, contextmanager, suppress
-from io import BytesIO
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, Self
@@ -26,6 +24,7 @@ from diffract.core.utils.exceptions import format_exception_message
 from .base_manager import BaseStorageManager
 from .interface import DEFAULT_TABLE, UID
 from .metadata import infer_value_metadata
+from .serialization import decode_value, encode_value
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -224,7 +223,6 @@ class SQLiteStorageManager(BaseStorageManager):
         wal_mode: bool = True,
         synchronous: str = "NORMAL",
         cache_size_kb: int = 64000,
-        use_json: bool = True,
         readonly: bool = False,
         timeout: float = 5.0,
         read_pool_size: int = 8,
@@ -245,7 +243,6 @@ class SQLiteStorageManager(BaseStorageManager):
             wal_mode: Enable Write-Ahead Logging for better concurrency.
             synchronous: SQLite synchronous mode (NORMAL, FULL, OFF).
             cache_size_kb: Cache size in kilobytes for write connection.
-            use_json: Prefer JSON serialization when possible.
             readonly: Open database in read-only mode.
             timeout: Database operation timeout in seconds.
             read_pool_size: Number of read-only connections in pool.
@@ -261,7 +258,7 @@ class SQLiteStorageManager(BaseStorageManager):
             blob_write_workers: Max workers for parallel blob file writes.
             **kwargs: Additional keyword arguments for BaseStorageManager.
         """
-        super().__init__(use_json=use_json, **kwargs)
+        super().__init__(**kwargs)
 
         self._path = path
         self._readonly = readonly
@@ -369,14 +366,7 @@ class SQLiteStorageManager(BaseStorageManager):
         Returns:
             Tuple of (serialized bytes, type string).
         """
-        if isinstance(value, np.ndarray):
-            bio = BytesIO()
-            np.save(bio, value, allow_pickle=False)
-            return bio.getvalue(), "ndarray"
-        if self._use_json:
-            with suppress(TypeError, ValueError):
-                return json.dumps(value, ensure_ascii=False).encode("utf-8"), "json"
-        return pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL), "pickle"
+        return encode_value(value)
 
     def _encode_value_meta(self, value: Any) -> str:
         """Encode value metadata into json format."""
@@ -426,14 +416,7 @@ class SQLiteStorageManager(BaseStorageManager):
         Raises:
             ValueError: If dtype is unknown.
         """
-        if dtype == "ndarray":
-            return np.load(BytesIO(data), allow_pickle=False)
-        if dtype == "json":
-            return json.loads(data.decode("utf-8"))
-        if dtype == "pickle":
-            return pickle.loads(data)  # noqa: S301
-        msg = f"Unknown type: {dtype}"
-        raise ValueError(msg)
+        return decode_value(data, dtype)
 
     def _store_large_array(
         self,
@@ -460,7 +443,7 @@ class SQLiteStorageManager(BaseStorageManager):
         """
         path = Path(file_path)
         with path.open("rb") as f:
-            return np.load(f, allow_pickle=False)
+            return np.load(f)
 
     def _delete_array_files(self, file_rows: list[tuple[str | None, str]]) -> None:
         """Delete array files asynchronously in background thread.
@@ -787,7 +770,7 @@ class SQLiteStorageManager(BaseStorageManager):
                 )
 
                 cur.executemany(
-                    f"INSERT INTO {tmp_table} "
+                    f"INSERT INTO {tmp_table} "  # nosec B608 - literal temp-table name
                     "(table_name, field, obj_uid) VALUES (?, ?, ?)",
                     tuple(
                         (tbl, field_name, obj_uid)
@@ -802,7 +785,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, field, obj_uid) IN (
                         SELECT table_name, field, obj_uid FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 ).fetchall()
 
                 cur.execute(
@@ -811,7 +794,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, field, obj_uid) IN (
                         SELECT table_name, field, obj_uid FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(
@@ -823,7 +806,7 @@ class SQLiteStorageManager(BaseStorageManager):
                       AND (table_name, obj_uid) NOT IN (
                         SELECT DISTINCT table_name, obj_uid FROM storage
                       )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(
@@ -835,7 +818,7 @@ class SQLiteStorageManager(BaseStorageManager):
                       AND (table_name, field) NOT IN (
                         SELECT DISTINCT table_name, field FROM storage
                       )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(f"DROP TABLE IF EXISTS {tmp_table}")
@@ -862,7 +845,8 @@ class SQLiteStorageManager(BaseStorageManager):
                 )
 
                 cur.executemany(
-                    f"INSERT INTO {tmp_table} (table_name, obj_uid) VALUES (?, ?)",
+                    f"INSERT INTO {tmp_table} "  # nosec B608 - literal temp-table name
+                    "(table_name, obj_uid) VALUES (?, ?)",
                     tuple(self._erase_obj_batch),
                 )
 
@@ -873,7 +857,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, obj_uid) IN (
                         SELECT table_name, obj_uid FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 ).fetchall()
 
                 cur.execute(
@@ -882,7 +866,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, obj_uid) IN (
                         SELECT table_name, obj_uid FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(
@@ -891,7 +875,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, obj_uid) IN (
                         SELECT table_name, obj_uid FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(
@@ -927,7 +911,8 @@ class SQLiteStorageManager(BaseStorageManager):
                 )
 
                 cur.executemany(
-                    f"INSERT INTO {tmp_table} (table_name, field) VALUES (?, ?)",
+                    f"INSERT INTO {tmp_table} "  # nosec B608 - literal temp-table name
+                    "(table_name, field) VALUES (?, ?)",
                     tuple(self._erase_field_for_all_batch),
                 )
 
@@ -938,7 +923,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, field) IN (
                         SELECT table_name, field FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 ).fetchall()
 
                 cur.execute(
@@ -947,7 +932,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, field) IN (
                         SELECT table_name, field FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(
@@ -956,7 +941,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     WHERE (table_name, field) IN (
                         SELECT table_name, field FROM {tmp_table}
                     )
-                    """
+                    """  # nosec B608 - literal temp-table name
                 )
 
                 cur.execute(

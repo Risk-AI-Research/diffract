@@ -1,20 +1,20 @@
 """In-memory LRU cache manager implementation.
 
 This module provides a pure Python in-memory cache manager that implements
-the ICacheManager protocol. It uses OrderedDict for LRU tracking and
-pickle for size estimation, making it suitable for development and testing
-environments where Redis is not available.
+the ICacheManager protocol. It uses OrderedDict for LRU tracking and the
+shared value codec for serialization, making it suitable for development and
+testing environments where Redis is not available.
 
 Features:
     - Process-local LRU cache with configurable memory limits
     - Optional TTL support for cache entries
     - Thread-safe via GIL (single-threaded access)
-    - Pickle-based size estimation for memory accounting
+    - Codec-based size estimation for memory accounting
     - No external dependencies
 
 Limitations:
     - Process-local only (not suitable for multi-process production)
-    - Approximate memory accounting using pickle size
+    - Approximate memory accounting using the encoded payload size
     - Single-threaded performance characteristics
 
 Example:
@@ -25,11 +25,12 @@ Example:
 
 from __future__ import annotations
 
-import pickle
 import threading
 import time
 from collections import OrderedDict
 from typing import Any
+
+from diffract.core.storage.serialization import decode_value, encode_value
 
 from .interface import UID, ICacheManager
 
@@ -38,8 +39,8 @@ class SimpleLRUCacheManager(ICacheManager):
     """In-memory LRU cache manager with TTL support and thread-safety.
 
     Implements ICacheManager using pure Python data structures for caching.
-    Uses OrderedDict to maintain LRU order and pickle serialization for
-    memory size calculation with overhead accounting.
+    Uses OrderedDict to maintain LRU order and the shared value codec for
+    serialization with overhead accounting.
 
     This implementation is designed for single-process applications and
     development environments. For production multi-process setups,
@@ -96,7 +97,7 @@ class SimpleLRUCacheManager(ICacheManager):
         self._key_prefix = key_prefix
         self._memory_overhead_factor = memory_overhead_factor
 
-        self._store: dict[str, tuple[bytes, float]] = {}
+        self._store: dict[str, tuple[bytes, str, float]] = {}
         self._lru: OrderedDict[str, None] = OrderedDict()
         self._field_index: dict[str, set[str]] = {}
         self._current_bytes = 0
@@ -122,7 +123,7 @@ class SimpleLRUCacheManager(ICacheManager):
 
         Args:
             key: Cache key string.
-            data: Pickled data bytes.
+            data: Encoded payload bytes.
 
         Returns:
             Estimated memory size in bytes.
@@ -178,12 +179,12 @@ class SimpleLRUCacheManager(ICacheManager):
         now = time.time()
         expired_keys = []
 
-        for key, (_data, ts) in self._store.items():
+        for key, (_data, _tag, ts) in self._store.items():
             if (now - ts) > self._ttl:
                 expired_keys.append(key)
 
         for key in expired_keys:
-            data, _ = self._store.pop(key, (b"", 0.0))
+            data, _tag, _ = self._store.pop(key, (b"", "", 0.0))
             entry_size = self._calculate_entry_size(key, data)
             self._current_bytes -= entry_size
             self._lru.pop(key, None)
@@ -227,7 +228,7 @@ class SimpleLRUCacheManager(ICacheManager):
         """
         while self._current_bytes > self._max_bytes and self._lru:
             oldest_key, _ = self._lru.popitem(last=False)
-            data, _ = self._store.pop(oldest_key, (b"", 0.0))
+            data, _tag, _ = self._store.pop(oldest_key, (b"", "", 0.0))
             entry_size = self._calculate_entry_size(oldest_key, data)
             self._current_bytes -= entry_size
 
@@ -254,7 +255,7 @@ class SimpleLRUCacheManager(ICacheManager):
             if not item:
                 return False
 
-            data, ts = item
+            data, _tag, ts = item
             if self._expired(ts):
                 entry_size = self._calculate_entry_size(key, data)
                 self._store.pop(key, None)
@@ -282,7 +283,7 @@ class SimpleLRUCacheManager(ICacheManager):
             if not item:
                 return None
 
-            data, ts = item
+            data, tag, ts = item
 
             if self._expired(ts):
                 entry_size = self._calculate_entry_size(key, data)
@@ -294,24 +295,7 @@ class SimpleLRUCacheManager(ICacheManager):
 
             self._touch_lru(key)
 
-            try:
-                return pickle.loads(data)  # noqa: S301
-            except (
-                ModuleNotFoundError,
-                ImportError,
-                AttributeError,
-                ValueError,
-                pickle.UnpicklingError,
-                EOFError,
-            ):
-                # Cache may contain pickles produced by a different Python/numpy
-                # version. Treat as a cache miss and delete the corrupted entry.
-                entry_size = self._calculate_entry_size(key, data)
-                self._store.pop(key, None)
-                self._lru.pop(key, None)
-                self._current_bytes -= entry_size
-                self._update_field_index(obj_uid, field_name, adding=False)
-                return None
+            return decode_value(data, tag)
 
     def list_objs_has_field(self, field_name: str) -> list[UID]:
         """List all object UIDs that have a specific field.
@@ -334,7 +318,7 @@ class SimpleLRUCacheManager(ICacheManager):
                     key = self._make_key(uid, field_name)
                     item = self._store.get(key)
                     if item:
-                        data, ts = item
+                        data, _tag, ts = item
                         if not self._expired(ts):
                             valid_uids.append(uid)
                         else:
@@ -358,7 +342,7 @@ class SimpleLRUCacheManager(ICacheManager):
                 if not key.endswith(suffix) or not key.startswith(self._key_prefix):
                     continue
 
-                data, ts = self._store.get(key, (b"", 0.0))
+                data, _tag, ts = self._store.get(key, (b"", "", 0.0))
                 if self._ttl is not None and (now - ts) > self._ttl:
                     entry_size = self._calculate_entry_size(key, data)
                     self._store.pop(key, None)
@@ -383,21 +367,25 @@ class SimpleLRUCacheManager(ICacheManager):
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to store.
-            value: Value to cache (must be pickle-serializable).
+            value: Value to cache. Supported kinds are NumPy arrays, bytes,
+                and JSON-serializable values.
+
+        Raises:
+            ValueError: If the value is not a codec-supported kind.
         """
         key = self._make_key(obj_uid, field_name)
-        data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        data, tag = encode_value(value)
         entry_size = self._calculate_entry_size(key, data)
 
         with self._lock:
             # Remove old entry size if updating existing key
             old = self._store.get(key)
             if old:
-                old_data, _ = old
+                old_data, _, _ = old
                 old_entry_size = self._calculate_entry_size(key, old_data)
                 self._current_bytes -= old_entry_size
 
-            self._store[key] = (data, time.time())
+            self._store[key] = (data, tag, time.time())
             self._current_bytes += entry_size
             self._touch_lru(key)
             self._update_field_index(obj_uid, field_name, adding=True)
@@ -419,7 +407,7 @@ class SimpleLRUCacheManager(ICacheManager):
         with self._lock:
             item = self._store.pop(key, None)
             if item:
-                data, _ = item
+                data, _tag, _ = item
                 entry_size = self._calculate_entry_size(key, data)
                 self._current_bytes -= entry_size
                 self._update_field_index(obj_uid, field_name, adding=False)
@@ -439,7 +427,7 @@ class SimpleLRUCacheManager(ICacheManager):
                     key = self._make_key(uid, field_name)
                     item = self._store.pop(key, None)
                     if item:
-                        data, _ = item
+                        data, _tag, _ = item
                         entry_size = self._calculate_entry_size(key, data)
                         self._current_bytes -= entry_size
                     self._lru.pop(key, None)
@@ -451,7 +439,7 @@ class SimpleLRUCacheManager(ICacheManager):
                 # Iterate over snapshot to avoid mutation during iteration
                 for key in tuple(self._store.keys()):
                     if key.endswith(suffix) and key.startswith(self._key_prefix):
-                        data, _ = self._store.pop(key, (b"", 0.0))
+                        data, _tag, _ = self._store.pop(key, (b"", "", 0.0))
                         entry_size = self._calculate_entry_size(key, data)
                         self._current_bytes -= entry_size
                         self._lru.pop(key, None)

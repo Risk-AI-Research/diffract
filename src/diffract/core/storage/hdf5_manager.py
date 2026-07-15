@@ -13,7 +13,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import pickle
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
@@ -33,6 +32,7 @@ from diffract.core.utils.exceptions import format_exception_message
 from .base_manager import BaseStorageManager
 from .interface import DEFAULT_TABLE, UID
 from .metadata import infer_value_metadata
+from .serialization import decode_value, encode_value
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -57,8 +57,9 @@ else:
     class HDF5StorageManager(BaseStorageManager):
         """Persistent storage manager using an HDF5 file.
 
-        Supports storing arbitrary Python values (pickled fallback) and NumPy arrays.
-        Intended for workloads with frequent multi-threaded reads and serialized writes.
+        Stores NumPy arrays natively and other values through the shared safe
+        codec (JSON documents or raw bytes). Intended for workloads with frequent
+        multi-threaded reads and serialized writes.
 
         Example:
             >>> storage = HDF5StorageManager("data.h5")
@@ -496,17 +497,11 @@ else:
                             data = data.item()
                         return data
 
-                    if kind == "bytes":
-                        raw = dataset[()]
-                        if isinstance(raw, np.ndarray):
-                            data_bytes = raw.tobytes()
-                            return pickle.loads(data_bytes)  # noqa: S301
-                        if isinstance(raw, (bytes, bytearray)):
-                            return raw
-                        return bytes(raw)
-
-                    msg = f"Unknown stored type: {kind}"
-                    raise TypeError(msg)  # noqa: TRY301
+                    raw = dataset[()]
+                    payload = (
+                        raw.tobytes() if isinstance(raw, np.ndarray) else bytes(raw)
+                    )
+                    return decode_value(payload, kind)
 
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 msg = f"Data corruption in '{field_name}/{obj_uid}': {exc}"
@@ -642,20 +637,14 @@ else:
         def _write_generic_dataset(
             self, group: h5py.Group, obj_uid: UID, value: Any, meta_json: str
         ) -> None:
-            """Write a non-ndarray value as an HDF5 dataset."""
-            try:
-                dataset = group.create_dataset(obj_uid, data=np.array(value))
-                dataset.attrs[STORAGE_ATTR_TYPE] = "ndarray"
-            except (TypeError, ValueError):
-                dataset = group.create_dataset(
-                    obj_uid,
-                    data=np.frombuffer(
-                        pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL),
-                        dtype=np.uint8,
-                    ),
-                    chunks=True,
-                )
-                dataset.attrs[STORAGE_ATTR_TYPE] = "bytes"
+            """Write a non-ndarray value as an HDF5 dataset via the shared codec."""
+            payload, tag = encode_value(value)
+            dataset = group.create_dataset(
+                obj_uid,
+                data=np.frombuffer(payload, dtype=np.uint8),
+                chunks=True,
+            )
+            dataset.attrs[STORAGE_ATTR_TYPE] = tag
             dataset.attrs[STORAGE_ATTR_META] = meta_json
 
         def _flush_set_field_batch(self) -> None:

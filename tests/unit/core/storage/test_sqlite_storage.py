@@ -1,6 +1,4 @@
-import os
 import sqlite3
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -37,7 +35,9 @@ def storage(db_path: str) -> SQLiteStorageManager:
 @pytest.fixture
 def storage_external(db_path: str) -> SQLiteStorageManager:
     # Force external file storage for any ndarray.
-    s = SQLiteStorageManager(path=db_path, array_threshold=1, array_dir="sqlite_blobs_test")
+    s = SQLiteStorageManager(
+        path=db_path, array_threshold=1, array_dir="sqlite_blobs_test"
+    )
     s.connect()
     try:
         yield s
@@ -50,7 +50,8 @@ def _fetch_row(db_path: str, uid: str, field: str) -> tuple[str, bytes, str | No
     try:
         cur = conn.cursor()
         row = cur.execute(
-            "SELECT value_type, value_data, file_path FROM storage WHERE field = ? AND obj_uid = ?",
+            "SELECT value_type, value_data, file_path FROM storage "
+            "WHERE field = ? AND obj_uid = ?",
             (field, uid),
         ).fetchone()
         assert row is not None
@@ -59,15 +60,23 @@ def _fetch_row(db_path: str, uid: str, field: str) -> tuple[str, bytes, str | No
         conn.close()
 
 
-def test_schema_and_indexes_created(storage: SQLiteStorageManager, db_path: str) -> None:
+def test_schema_and_indexes_created(
+    storage: SQLiteStorageManager, db_path: str
+) -> None:
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
-        tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {
+            r[0]
+            for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         assert "storage" in tables
         assert "obj_registry" in tables
         assert "field_registry" in tables
-        indexes = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        indexes = {
+            r[0]
+            for r in cur.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
         assert "idx_table_field" in indexes
         assert "idx_table_obj" in indexes
     finally:
@@ -83,20 +92,22 @@ def test_set_get_json(storage: SQLiteStorageManager) -> None:
     assert storage.get_field(uid, "__metadata__") == meta
 
 
-def test_set_get_pickle_fallback(storage: SQLiteStorageManager) -> None:
-    uid = "u_pickle"
+def test_set_unserializable_value_raises(storage: SQLiteStorageManager) -> None:
+    uid = "u_unserializable"
     field = "v"
-    value = {1, 2, 3}  # not JSON-serializable, but pickleable
+    value = {1, 2, 3}  # neither an ndarray, bytes, nor JSON-serializable
 
-    storage.set_field(uid, field, value)
-    got = storage.get_field(uid, field)
-    assert got == value
+    with pytest.raises(ValueError, match="cannot serialize"):
+        storage.set_field(uid, field, value)
 
 
-def test_set_get_ndarray_inline_in_db(storage: SQLiteStorageManager, db_path: str) -> None:
+def test_set_get_ndarray_inline_in_db(
+    storage: SQLiteStorageManager, db_path: str
+) -> None:
     uid = "u_arr_inline"
     field = "weights"
-    arr = (np.random.randn(16, 8).astype(np.float32) * 0.1).copy()
+    rng = np.random.default_rng(0)
+    arr = (rng.standard_normal((16, 8)).astype(np.float32) * 0.1).copy()
 
     storage.set_field(uid, field, arr)
     got = storage.get_field(uid, field)
@@ -123,10 +134,12 @@ def test_get_field_metadata(storage: SQLiteStorageManager) -> None:
     assert meta.get("dtype") == "float32"
 
 
-def test_set_get_ndarray_external_file(storage_external: SQLiteStorageManager, db_path: str) -> None:
+def test_set_get_ndarray_external_file(
+    storage_external: SQLiteStorageManager, db_path: str
+) -> None:
     uid = "u_arr_file"
     field = "weights"
-    arr = np.random.randn(8, 8).astype(np.float32)
+    arr = np.random.default_rng(0).standard_normal((8, 8)).astype(np.float32)
 
     storage_external.set_field(uid, field, arr)
     got = storage_external.get_field(uid, field)
@@ -139,10 +152,12 @@ def test_set_get_ndarray_external_file(storage_external: SQLiteStorageManager, d
     assert Path(file_path).exists()
 
 
-def test_async_file_deletion_on_erase_field(storage_external: SQLiteStorageManager, db_path: str) -> None:
+def test_async_file_deletion_on_erase_field(
+    storage_external: SQLiteStorageManager, db_path: str
+) -> None:
     uid = "u_del_field"
     field = "big"
-    arr = np.random.randn(8, 8).astype(np.float32)
+    arr = np.random.default_rng(0).standard_normal((8, 8)).astype(np.float32)
 
     storage_external.set_field(uid, field, arr)
     _, _, file_path = _fetch_row(db_path, uid, field)
@@ -155,10 +170,13 @@ def test_async_file_deletion_on_erase_field(storage_external: SQLiteStorageManag
     _wait_for_path_gone(file_path)
 
 
-def test_async_file_deletion_on_erase_obj(storage_external: SQLiteStorageManager, db_path: str) -> None:
+def test_async_file_deletion_on_erase_obj(
+    storage_external: SQLiteStorageManager, db_path: str
+) -> None:
     uid = "u_del_obj"
+    rng = np.random.default_rng(0)
     storage_external.set_field(uid, "a", 1)
-    storage_external.set_field(uid, "b", np.random.randn(8, 8).astype(np.float32))
+    storage_external.set_field(uid, "b", rng.standard_normal((8, 8)).astype(np.float32))
     storage_external.set_field(uid, "c", {"x": 1})
 
     _, _, file_path = _fetch_row(db_path, uid, "b")
@@ -186,14 +204,23 @@ def test_erase_field_for_all(storage: SQLiteStorageManager) -> None:
     assert storage.has_field("q3", "alive") is True
 
 
-def test_clear_removes_all_and_deletes_files(storage_external: SQLiteStorageManager, db_path: str) -> None:
-    storage_external.set_field("m1", "f", np.random.randn(8, 8).astype(np.float32))
-    storage_external.set_field("m2", "f", np.random.randn(8, 8).astype(np.float32))
+def test_clear_removes_all_and_deletes_files(
+    storage_external: SQLiteStorageManager, db_path: str
+) -> None:
+    rng = np.random.default_rng(0)
+    storage_external.set_field(
+        "m1", "f", rng.standard_normal((8, 8)).astype(np.float32)
+    )
+    storage_external.set_field(
+        "m2", "f", rng.standard_normal((8, 8)).astype(np.float32)
+    )
 
     _, _, fp1 = _fetch_row(db_path, "m1", "f")
     _, _, fp2 = _fetch_row(db_path, "m2", "f")
-    assert fp1 is not None and Path(fp1).exists()
-    assert fp2 is not None and Path(fp2).exists()
+    assert fp1 is not None
+    assert Path(fp1).exists()
+    assert fp2 is not None
+    assert Path(fp2).exists()
 
     storage_external.clear()
     assert storage_external.list_objs() == []
@@ -281,15 +308,22 @@ def test_nested_batch_contexts(storage: SQLiteStorageManager) -> None:
     assert storage.get_field(uid, "d") == 4
 
 
-def test_nested_batch_context_rollback_on_exception(storage: SQLiteStorageManager) -> None:
+def test_nested_batch_context_rollback_on_exception(
+    storage: SQLiteStorageManager,
+) -> None:
     """Test that exceptions in nested contexts properly rollback."""
     uid = "u_nested_exception"
-    with pytest.raises(ValueError, match="Test exception"):
+
+    def _write_then_raise() -> None:
         with storage:
             storage.set_field(uid, "a", 1)
             with storage:  # Nested context
                 storage.set_field(uid, "b", 2)
                 raise ValueError("Test exception")
+
+    with pytest.raises(ValueError, match="Test exception"):
+        _write_then_raise()
+
     # All changes should be rolled back
     assert storage.has_field(uid, "a") is False
     assert storage.has_field(uid, "b") is False
@@ -348,7 +382,9 @@ def test_connection_pool_readonly_and_overflow(db_path: str) -> None:
                         except sqlite3.OperationalError:
                             pass
                         else:
-                            raise AssertionError("Write succeeded on query_only connection")
+                            raise AssertionError(
+                                "Write succeeded on query_only connection"
+                            )
                         got_second.set()
                 except BaseException as e:  # noqa: BLE001 - test helper
                     errors.append(e)
@@ -388,7 +424,9 @@ def test_concurrent_reads_from_pool(db_path: str) -> None:
             except BaseException as e:  # noqa: BLE001
                 errors.append(e)
 
-        threads = [threading.Thread(target=_reader, args=(i,)) for i in range(n_readers)]
+        threads = [
+            threading.Thread(target=_reader, args=(i,)) for i in range(n_readers)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -427,7 +465,9 @@ def test_concurrent_reads_during_write_transaction(db_path: str) -> None:
             # Reader should still be able to read
             t = threading.Thread(target=_reader, daemon=True)
             t.start()
-            assert read_completed.wait(2.0), "Read did not complete during write transaction"
+            assert read_completed.wait(2.0), (
+                "Read did not complete during write transaction"
+            )
             t.join(timeout=1.0)
 
         assert not errors, f"Errors in reader thread: {errors!r}"
@@ -445,7 +485,10 @@ def test_parallel_blob_writes(db_path: str) -> None:
     storage.connect()
     try:
         n_arrays = 10
-        arrays = [np.random.randn(32, 32).astype(np.float32) for _ in range(n_arrays)]
+        rng = np.random.default_rng(0)
+        arrays = [
+            rng.standard_normal((32, 32)).astype(np.float32) for _ in range(n_arrays)
+        ]
 
         # Write all arrays in one batch context
         with storage:
