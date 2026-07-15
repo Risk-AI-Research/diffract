@@ -22,10 +22,15 @@ class KernelInfo:
     Attributes:
         summary: Brief description of kernel functionality.
         notes: Additional implementation notes or usage guidelines.
+        formula: Per-name display formula (LaTeX) for the metrics catalog,
+            overriding the ``:math:`` role parsed from the kernel docstring.
+            Set it on stacked registrations whose shared body needs a
+            distinct formula per registered name.
     """
 
     summary: str | None = None
     notes: str | None = None
+    formula: str | None = None
 
 
 @dataclass

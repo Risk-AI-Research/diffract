@@ -31,18 +31,18 @@ from .mat_properties import (
     weights_rand,
     weights_std,
 )
-from .model_quality import pl_alpha_weighted, rand_distance
+from .model_quality import pl_alpha_weighted, w1_rand_distance
 from .norms import (
     alpha_norm,
     frob_norm,
-    l1_norm,
     l2_norm,
     log_norm,
+    log_prod_frob_norm,
+    log_prod_spectral_norm,
     log_spectral_norm,
     model_alpha_norm,
+    nuclear_norm,
     param_norm,
-    prod_frob_norm,
-    prod_spectral_norm,
 )
 from .ranks import effective_rank, hard_rank, mp_soft_rank, stable_rank
 from .tracy_widom import tw_esd_bound, tw_num_spikes

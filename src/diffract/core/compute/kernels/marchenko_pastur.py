@@ -6,6 +6,8 @@ from numpy.typing import NDArray
 from diffract.core.compute.decorator import kernel
 from diffract.core.compute.extensions.rmt import marchenko_pastur_cdf
 
+EPS = 1e-16
+
 
 @kernel(produce_fields=("mp_esd_max", "mp_esd_min", "mp_bulk_std"))
 def marchenko_pastur_fit(
@@ -15,13 +17,17 @@ def marchenko_pastur_fit(
     aspect_ratio: float,
     lower_dim: int,
 ) -> tuple[float, float, float]:
-    """Fit Marchenko-Pastur distribution to random ESD."""
+    r"""Fit the Marchenko-Pastur bulk edges to the randomized ESD.
+
+    :math:`\lambda_\pm = \sigma_{\mathrm{b}}^2\,(1 \pm 1/\sqrt{Q})^2`
+    """
     sigma_2_fit = weights_std**2
     eig_max_fit = sigma_2_fit * (1 + (1 / np.sqrt(aspect_ratio))) ** 2
 
     eigenvals_bleeding_out = esd_rand[esd_rand > eig_max_fit]
     if eigenvals_bleeding_out.size > 0:
-        sigma_2_corrected = sigma_2_fit - (np.sum(eigenvals_bleeding_out) / lower_dim)
+        bulk = esd_rand[esd_rand <= eig_max_fit]
+        sigma_2_corrected = np.sum(bulk) / lower_dim
         eig_max_corrected = sigma_2_corrected * (1 + (1 / np.sqrt(aspect_ratio))) ** 2
         mp_esd_max = eig_max_corrected
         mp_bulk_std = np.sqrt(sigma_2_corrected)
@@ -38,7 +44,10 @@ def marchenko_pastur_fit(
 
 @kernel
 def mp_sval_max(mp_esd_max: float, greater_dim: int) -> float:
-    """Compute maximum singular value from MP ESD max."""
+    r"""Singular value at the MP bulk edge.
+
+    :math:`\sigma_+^{\mathrm{MP}} = \sqrt{\lambda_+ N}`
+    """
     return np.sqrt(mp_esd_max * greater_dim)
 
 
@@ -50,29 +59,47 @@ def mp_ks(
     mp_esd_max: float,
     mp_esd_min: float,
 ) -> float:
-    """Compute Kolmogorov-Smirnov distance for Marchenko-Pastur fit."""
+    r"""Two-sided Kolmogorov-Smirnov distance for the MP fit.
+
+    :math:`D = \sup_\lambda \lvert \hat{F}(\lambda) - F_{\mathrm{MP}}(\lambda)\rvert`
+    """
     ratio = 1 / (aspect_ratio + 1e-8)
     sigma = mp_bulk_std  # we consider the fitted bulk std as the standard deviation
 
     esd_mask = (mp_esd_min < esd) & (esd < mp_esd_max)
-    if np.sum(esd_mask).astype(int).item() == 0:
-        ks_distance = 1
-    else:
-        esd_filtered = esd[esd_mask]
-        model_cdf = marchenko_pastur_cdf(esd_filtered, ratio, sigma)
+    n = np.sum(esd_mask).astype(int).item()
+    if n == 0:
+        return 1.0
 
-        empirical_cdf = np.arange(esd_filtered.size) / esd_filtered.size
+    # Condition the model CDF on the same (mp_esd_min, mp_esd_max) window the
+    # sample is truncated to; the sentinel guards a window with no model mass.
+    f_min = float(marchenko_pastur_cdf(mp_esd_min, ratio, sigma))
+    f_max = float(marchenko_pastur_cdf(mp_esd_max, ratio, sigma))
+    window = f_max - f_min
+    if window <= EPS:
+        return 1.0
 
-        ks_distance = np.max(np.abs(empirical_cdf - model_cdf))
+    esd_filtered = esd[esd_mask]
+    model_cdf = (marchenko_pastur_cdf(esd_filtered, ratio, sigma) - f_min) / window
 
-    return ks_distance
+    ranks = np.arange(1, n + 1)
+    d_plus = np.max(ranks / n - model_cdf)
+    d_minus = np.max(model_cdf - (ranks - 1) / n)
+
+    return float(max(d_plus, d_minus))
 
 
 @kernel
 def mp_concentration(
     esd: NDArray[np.floating[Any]], mp_esd_max: float, mp_esd_min: float
 ) -> float:
-    """Compute MP bulk concentration (bulk size / total size)."""
+    r"""MP bulk concentration (bulk fraction of the spectrum).
+
+    :math:`\#\{i : \lambda_- \le \lambda_i \le \lambda_+\} / M`
+    """
+    if np.isnan(mp_esd_max) or np.isnan(mp_esd_min) or np.isnan(esd).any():
+        return float("nan")
+
     mask = (mp_esd_min <= esd) & (esd <= mp_esd_max)
     bulk_size = cast("int", np.sum(mask.astype(int)).item())
 
@@ -86,14 +113,20 @@ def mp_presence(
     mp_esd_max: float,
     mp_esd_min: float,
 ) -> float:
-    """Compute MP bulk presence (bulk width / total width)."""
+    r"""MP bulk presence (bulk width as a fraction of the spectrum width).
+
+    :math:`(\lambda_+ - \lambda_-) / (\lambda_{\max} - \lambda_{\min})`
+    """
     esd_width = esd_max - esd_min
     mp_width = mp_esd_max - mp_esd_min
 
-    return mp_width / esd_width
+    return float(np.clip(mp_width / (esd_width + EPS), 0.0, 1.0))
 
 
 @kernel
-def mp_num_spikes(esd: NDArray[np.floating[Any]], mp_esd_max: float) -> int:
-    """Count number of spikes above MP bulk maximum."""
-    return cast("int", np.sum((esd > mp_esd_max).astype(int)).item())
+def mp_num_spikes(esd: NDArray[np.floating[Any]], mp_esd_max: float) -> float:
+    r"""Spikes above the MP bulk edge :math:`\#\{i : \lambda_i > \lambda_+\}`."""
+    if np.isnan(mp_esd_max) or np.isnan(esd).any():
+        return float("nan")
+
+    return float(np.sum((esd > mp_esd_max).astype(int)).item())
