@@ -54,6 +54,11 @@ class AggregateRepository(DataRepository[AggregateMetadata, AggregateProxy]):
         Returns:
             Existing or newly created AggregateProxy.
         """
+        # Canonicalize context order so the stored metadata matches the uid,
+        # which is built from the sorted context.
+        context_models = tuple(sorted(context_models))
+        context_params = tuple(sorted(context_params))
+
         # Create deterministic UID
         uid = AggregateMetadata.create_uid_from_context(
             field_name=field_name,

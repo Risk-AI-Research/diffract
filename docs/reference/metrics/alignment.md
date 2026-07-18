@@ -2,8 +2,12 @@
 
 Alignment metrics compare a parameter's singular subspaces across two
 checkpoints: how far the left and right singular vectors of the same layer have
-moved. They are `CROSS_MODEL` kernels — each requires exactly two models. See
-the [catalog](catalog.md) for every field.
+moved. They are `CROSS_MODEL` kernels — each compares **exactly two models**, so
+scope the session to the pair before applying,
+`session.filter(model_ids=[a, b]).compute.apply("l_agreement")`; any other scope
+size raises `ScopeValidationError`. See the
+[Apply levels](../../guide/recipes/kernels_and_compute.md#apply-levels) guide for the
+pairwise workflow and the [catalog](catalog.md) for every field.
 
 ## Overlap
 

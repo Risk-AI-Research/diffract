@@ -23,6 +23,18 @@
 .. autoexception:: diffract.session.KernelNotFoundError
 ```
 
+```{eval-rst}
+.. autoexception:: diffract.session.ScopeValidationError
+```
+
+```{eval-rst}
+.. autoexception:: diffract.session.InvalidIdentifierError
+```
+
+```{eval-rst}
+.. autoexception:: diffract.session.IncompatibleStoreError
+```
+
 ## Session namespaces
 
 The `Session` API surface is organized into namespaces, available as

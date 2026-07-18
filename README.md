@@ -114,7 +114,9 @@ internal structure:
 
   - **PARAMETER** - Operate on individual weight matrices.
   - **IN_MODEL** - Aggregate within a single model.
-  - **CROSS_MODEL** - Compare or aggregate across models.
+  - **CROSS_MODEL** - Compare or aggregate across models. Pairwise comparisons
+    (the alignment/overlap family) compare exactly two models—scope to a pair with
+    `filter(model_ids=[a, b])`.
 
 - **Built-in Visualization**: Publication-ready Plotly plots with theming support.
 
@@ -194,14 +196,21 @@ with attn:
 Export results in various formats (`pandas`, `polars`, `dict`, `json`, or `list`):
 
 ```python
-scalars_df = session.results.export_metrics("stable_rank", export_format="pandas")
-aggregates_df = session.results.export_aggregates("stable_rank", export_format="pandas")
+with session:
+    session.compute.apply("stable_rank", "log_norm")
 
-# Other formats work the same way
-results = session.results.export_metrics("stable_rank", export_format="polars")
-results = session.results.export_metrics("stable_rank", export_format="dict")
-results = session.results.export_metrics("stable_rank", export_format="json")
-results = session.results.export_metrics("stable_rank", export_format="list")
+    # PARAMETER-level fields come from export_metrics
+    scalars_df = session.results.export_metrics("stable_rank", export_format="pandas")
+    # IN_MODEL / CROSS_MODEL fields come from export_aggregates
+    aggregates_df = session.results.export_aggregates(
+        "log_norm", export_format="pandas"
+    )
+
+    # Other formats work the same way
+    results = session.results.export_metrics("stable_rank", export_format="polars")
+    results = session.results.export_metrics("stable_rank", export_format="dict")
+    results = session.results.export_metrics("stable_rank", export_format="json")
+    results = session.results.export_metrics("stable_rank", export_format="list")
 ```
 
 ### Visualization
@@ -237,6 +246,19 @@ session.compute.list_available_kernels(verbose=True)
 session.compute.list_available_metrics(verbose=True)
 session.compute.configure_kernel("hard_rank", rtol=1e-6)
 ```
+
+Configuration takes effect when a kernel executes. Fields already stored are reused
+as-is — `apply` skips them by field presence, without comparing stored values to the
+current configuration. To recompute under a new configuration, erase the stored fields
+first:
+
+```python
+session.results.erase("hard_rank")
+session.compute.apply("hard_rank")  # computes with rtol=1e-6
+```
+
+See [kernel configuration](https://risk-ai-research.github.io/diffract/guide/recipes/kernels_and_compute.html)
+for the erase-then-apply pattern with multi-output kernels and dependent fields.
 
 ### Session Management
 

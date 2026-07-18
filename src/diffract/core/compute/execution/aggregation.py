@@ -5,10 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from diffract.core.constants import (
-    format_contextual_field_name,
-    format_field_suffix,
-)
 from diffract.core.data.nn.params.interface import IParameterView
 
 type GroupsIterator = Iterable[tuple[str, IParameterView]]
@@ -17,7 +13,7 @@ type ContextBuilder = Callable[[str, IParameterView], AggregationContext]
 
 @dataclass(frozen=True)
 class AggregationContext:
-    """Context for aggregated computations with contextual field naming.
+    """Structured context of an aggregated computation.
 
     Attributes:
         models: Model identifiers participating in aggregation.
@@ -26,16 +22,6 @@ class AggregationContext:
 
     models: tuple[str, ...] | None = None
     parameters: tuple[str, ...] | None = None
-
-    def to_field_suffix(self) -> str:
-        """Build a deterministic suffix from context identifiers."""
-        return format_field_suffix(models=self.models, params=self.parameters)
-
-    def create_field_name(self, field_name: str) -> str:
-        """Compose contextual field name using the context suffix."""
-        return format_contextual_field_name(
-            field_name, models=self.models, params=self.parameters
-        )
 
 
 def aggregate_parameters(

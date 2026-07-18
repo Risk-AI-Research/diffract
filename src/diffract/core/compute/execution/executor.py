@@ -89,7 +89,9 @@ class KernelExecutor:
         """Reset executed kernels set, allowing re-execution."""
         self._executed.clear()
 
-    def execute(self, field_or_kernel_name: str, parameters: IParameterView) -> None:
+    def execute(
+        self, field_or_kernel_name: str, parameters: IParameterView
+    ) -> set[str]:
         """Execute a kernel or produce a field with dependency resolution.
 
         Main entry point for kernel execution. Resolves all dependencies
@@ -98,28 +100,35 @@ class KernelExecutor:
         Args:
             field_or_kernel_name: Kernel name or field name to execute/produce.
             parameters: Parameter collection to process.
+
+        Returns:
+            The set of field names actually written across the resolved
+            dependency chain (empty when everything was already computed).
         """
         if field_or_kernel_name in self._executed:
-            return
+            return set()
 
         dependencies = self._registry.resolve_dependencies(field_or_kernel_name)
 
+        written: set[str] = set()
         for dep in dependencies:
             if dep != field_or_kernel_name and dep not in self._executed:
-                self.execute(dep, parameters)
+                written |= self.execute(dep, parameters)
 
         if self._registry.has_kernel(field_or_kernel_name):
-            self._dispatch_kernel(field_or_kernel_name, parameters)
+            written |= self._dispatch_kernel(field_or_kernel_name, parameters)
             self._executed.add(field_or_kernel_name)
+        return written
 
-    def _dispatch_kernel(self, kernel_name: str, parameters: IParameterView) -> None:
+    def _dispatch_kernel(
+        self, kernel_name: str, parameters: IParameterView
+    ) -> set[str]:
         """Dispatch kernel execution to the appropriate runner."""
         apply_level = self._registry.get_kernel_apply_level(kernel_name)
 
         if apply_level == KernelApplyLevel.PARAMETER:
-            self._parameter_runner.run(kernel_name, parameters)
-        elif apply_level in (KernelApplyLevel.IN_MODEL, KernelApplyLevel.CROSS_MODEL):
-            self._aggregation_runner.run(kernel_name, parameters)
-        else:
-            msg = f"Unknown kernel apply level: {apply_level}"
-            raise RuntimeError(msg)
+            return self._parameter_runner.run(kernel_name, parameters)
+        if apply_level in (KernelApplyLevel.IN_MODEL, KernelApplyLevel.CROSS_MODEL):
+            return self._aggregation_runner.run(kernel_name, parameters)
+        msg = f"Unknown kernel apply level: {apply_level}"
+        raise RuntimeError(msg)

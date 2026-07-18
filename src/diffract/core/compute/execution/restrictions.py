@@ -6,11 +6,16 @@ import logging
 from collections.abc import Hashable
 from typing import Any
 
+from .aggregation import AggregationContext
 from .enums import KernelRestrictions
 
 logger = logging.getLogger(__name__)
 
-_BINARY_ARG_COUNT = 2
+_BINARY_MODEL_COUNT = 2
+
+# An aggregation task id is a (group_id, AggregationContext) pair; the
+# arity is unrelated to the binary-kernel model count.
+_AGGREGATION_TASK_ARITY = 2
 
 
 def apply_restrictions_filter(
@@ -18,23 +23,41 @@ def apply_restrictions_filter(
     tasks: dict[Hashable, tuple[Any, ...]],
     restrictions: KernelRestrictions | None,
 ) -> None:
-    """Remove tasks that don't meet kernel restrictions (mutates tasks dict).
+    """Drop tasks that violate kernel restrictions (mutates tasks dict).
+
+    The ``BINARY`` restriction marks a cross-model kernel that operates on a
+    model pair. A group spanning any other number of models is dropped with a
+    ``WARNING`` -- never silently -- so a mis-scoped binary kernel cannot no-op
+    unnoticed (the caller pre-validates scope and raises before reaching here;
+    this is the defense-in-depth backstop).
 
     Args:
         kernel_name: Name of the kernel for logging.
-        tasks: Dictionary of task_id -> args to filter in place.
+        tasks: Dictionary of task_id -> args to filter in place. Aggregation
+            task ids are ``(group_id, AggregationContext)``; the model count is
+            read from the context.
         restrictions: Optional kernel restrictions to check.
     """
-    if not restrictions:
+    if not restrictions or not (restrictions & KernelRestrictions.BINARY):
         return
 
     to_remove: list[Hashable] = []
-    for task_id, args in tasks.items():
-        if not _check_restrictions(restrictions, args):
-            logger.debug(
-                "Skip computation for kernel '%s', task '%s': restriction violated",
+    for task_id in tasks:
+        context = _task_context(task_id)
+        if context is None:
+            # BINARY is a cross-model restriction; there is nothing to enforce
+            # off the aggregation path.
+            continue
+
+        model_count = len(context.models or ())
+        if model_count != _BINARY_MODEL_COUNT:
+            logger.warning(
+                "Skipping kernel '%s' for group '%s': a binary cross-model kernel "
+                "requires exactly two models, but the group spans %d: %s",
                 kernel_name,
-                task_id,
+                _task_label(task_id),
+                model_count,
+                list(context.models or ()),
             )
             to_remove.append(task_id)
 
@@ -42,20 +65,17 @@ def apply_restrictions_filter(
         del tasks[task_id]
 
 
-def _check_restrictions(
-    restrictions: KernelRestrictions, args: tuple[Any, ...]
-) -> bool:
-    """Check if arguments satisfy kernel restrictions.
+def _task_context(task_id: Hashable) -> AggregationContext | None:
+    """Extract the aggregation context from a task id, if present."""
+    if isinstance(task_id, tuple) and len(task_id) == _AGGREGATION_TASK_ARITY:
+        candidate = task_id[1]
+        if isinstance(candidate, AggregationContext):
+            return candidate
+    return None
 
-    Args:
-        restrictions: Kernel restrictions flags.
-        args: Tuple of arguments to check.
 
-    Returns:
-        True if all restrictions are satisfied, False otherwise.
-    """
-    if restrictions & KernelRestrictions.BINARY:
-        for arg in args:
-            if hasattr(arg, "__len__") and len(arg) != _BINARY_ARG_COUNT:
-                return False
-    return True
+def _task_label(task_id: Hashable) -> Any:
+    """Human-readable group label for logging."""
+    if isinstance(task_id, tuple) and task_id:
+        return task_id[0]
+    return task_id

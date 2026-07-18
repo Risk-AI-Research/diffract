@@ -14,6 +14,8 @@ from contextlib import closing, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
+from .migrations import SCHEMA_META_TABLE, ensure_schema_version
+
 if TYPE_CHECKING:
     import types
 
@@ -90,22 +92,39 @@ class SQLiteMetadataIndex:
         self._in_destructor = False
 
     def connect(self) -> None:
-        """Connect to database and apply pragmas."""
+        """Connect to database, apply pragmas, and verify the schema version.
+
+        Raises:
+            SchemaVersionError: If the database is at a different schema
+                version; the connection is not kept.
+        """
         if self._conn is not None:
             return
 
-        self._conn = sqlite3.connect(
+        conn = sqlite3.connect(
             self._path,
             check_same_thread=False,
             timeout=self._timeout,
             isolation_level=None,
         )
+        try:
+            with closing(conn.cursor()) as cur:
+                # Connection-scoped pragmas; none mutate the database file.
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute(f"PRAGMA cache_size=-{self._cache_size_kb}")
+                cur.execute("PRAGMA temp_store=MEMORY")
+            # Verify the version before journal_mode=WAL: switching journal
+            # mode persists to the file header, so a refused open must reject
+            # the store before writing anything to it.
+            ensure_schema_version(conn, path=self._path)
+            with closing(conn.cursor()) as cur:
+                cur.execute("PRAGMA journal_mode=WAL")
+        except BaseException:
+            with suppress(sqlite3.Error):
+                conn.close()
+            raise
 
-        with closing(self._conn.cursor()) as cur:
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            cur.execute(f"PRAGMA cache_size=-{self._cache_size_kb}")
-            cur.execute("PRAGMA temp_store=MEMORY")
+        self._conn = conn
         self._max_sql_variables = self._detect_max_sql_variables()
 
     def close(self) -> None:
@@ -598,7 +617,15 @@ class SQLiteMetadataIndex:
             return [row[0] for row in cur.fetchall()]
 
     def clear(self, table: str | None = None) -> None:
-        """Clear data from index."""
+        """Clear data from index.
+
+        The ``schema_meta`` record is infrastructure, not data: it is
+        preserved whether clearing all tables or targeting it by name.
+
+        Args:
+            table: If provided, clear only this table (``schema_meta`` is a
+                no-op). If None, clear every data table.
+        """
         self._ensure_connected()
 
         with self._lock, closing(self._conn.cursor()) as cur:
@@ -607,11 +634,11 @@ class SQLiteMetadataIndex:
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = [row[0] for row in cur.fetchall()]
                 for t in tables:
-                    if not t.startswith("sqlite_"):
+                    if not t.startswith("sqlite_") and t != SCHEMA_META_TABLE:
                         cur.execute(
                             f"DELETE FROM {t}"  # nosec B608 - name from sqlite_master
                         )
-            else:
+            elif table != SCHEMA_META_TABLE:
                 cur.execute(f"DELETE FROM {table}")  # nosec B608 - repo table constant
 
     def _serialize_value(self, value: Any) -> Any:

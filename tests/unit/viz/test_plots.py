@@ -74,6 +74,37 @@ class TestBoxPlot:
 
         assert isinstance(fig, go.Figure)
 
+    def test_viz_namespace_box_wrapper_style_coercion(self, mock_session):
+        from diffract.session.namespaces.viz.box import box
+        from diffract.viz.data import FieldRef
+
+        captured: dict[str, object] = {}
+
+        class FakeViz:
+            def draw(self, *, plot, theme=None, theme_path=None):
+                captured["plot"] = plot
+                return plot.render(mock_session, theme=theme)
+
+        box(
+            FakeViz(),
+            y="stable_rank",
+            x="model_id",
+            marker_color="red",
+            marker_symbol="circle",
+        )
+        assert captured["plot"].marker_color == "red"
+        assert captured["plot"].marker_symbol == "circle"
+
+        box(
+            FakeViz(),
+            y="stable_rank",
+            x="model_id",
+            marker_color="model_id",
+            marker_symbol="model_id",
+        )
+        assert captured["plot"].marker_color == FieldRef("model_id")
+        assert captured["plot"].marker_symbol == FieldRef("model_id")
+
 
 class TestViolinPlot:
     def test_render_returns_figure(self, mock_session):
@@ -96,6 +127,37 @@ class TestViolinPlot:
         fig = plot.render(mock_session, theme=DARK_THEME)
 
         assert fig.layout.plot_bgcolor == DARK_THEME.background.plot_bgcolor
+
+    def test_viz_namespace_violin_wrapper_style_coercion(self, mock_session):
+        from diffract.session.namespaces.viz.violin import violin
+        from diffract.viz.data import FieldRef
+
+        captured: dict[str, object] = {}
+
+        class FakeViz:
+            def draw(self, *, plot, theme=None, theme_path=None):
+                captured["plot"] = plot
+                return plot.render(mock_session, theme=theme)
+
+        violin(
+            FakeViz(),
+            y="weights_svals",
+            x="model_id",
+            marker_color="model_id",
+            marker_symbol="model_id",
+        )
+        assert captured["plot"].marker_color == FieldRef("model_id")
+        assert captured["plot"].marker_symbol == FieldRef("model_id")
+
+        violin(
+            FakeViz(),
+            y="weights_svals",
+            x="model_id",
+            marker_color="red",
+            marker_symbol="circle",
+        )
+        assert captured["plot"].marker_color == "red"
+        assert captured["plot"].marker_symbol == "circle"
 
 
 class TestScatterPlot:
@@ -249,6 +311,89 @@ class TestSparkline:
 
         assert fig.layout.xaxis.categoryorder == "category ascending"
         assert fig.layout.yaxis.categoryorder == "category descending"
+
+    def test_viz_namespace_scatter_wrapper_coerces_style_field_names(
+        self, mock_session
+    ):
+        from diffract.session.namespaces.viz.scatter import scatter
+        from diffract.viz.data import FieldRef
+
+        captured: dict[str, object] = {}
+
+        class FakeViz:
+            def draw(self, *, plot, theme=None, theme_path=None):
+                captured["plot"] = plot
+                return plot.render(mock_session, theme=theme)
+
+        fig = scatter(
+            FakeViz(),
+            x="stable_rank",
+            y="stable_rank",
+            marker_color="model_id",
+            marker_symbol="model_id",
+        )
+
+        assert len(fig.data) >= 1
+        assert captured["plot"].marker_color == FieldRef("model_id")
+        assert captured["plot"].marker_symbol == FieldRef("model_id")
+
+    def test_viz_namespace_scatter_wrapper_keeps_style_literals(self, mock_session):
+        from diffract.session.namespaces.viz.scatter import scatter
+
+        captured: dict[str, object] = {}
+
+        class FakeViz:
+            def draw(self, *, plot, theme=None, theme_path=None):
+                captured["plot"] = plot
+                return plot.render(mock_session, theme=theme)
+
+        scatter(
+            FakeViz(),
+            x="stable_rank",
+            y="stable_rank",
+            marker_color="red",
+            marker_symbol="circle",
+        )
+
+        assert captured["plot"].marker_color == "red"
+        assert captured["plot"].marker_symbol == "circle"
+
+    def test_viz_namespace_sparkline_wrapper_style_coercion(self, mock_session):
+        from diffract.session.namespaces.viz.sparkline import sparkline
+        from diffract.viz.data import FieldRef
+
+        captured: dict[str, object] = {}
+
+        class FakeViz:
+            def draw(self, *, plot, theme=None, theme_path=None):
+                captured["plot"] = plot
+                return plot.render(mock_session, theme=theme)
+
+        sparkline(
+            FakeViz(),
+            y="stable_rank",
+            x="layer_id",
+            group_by="model_id",
+            marker_color="model_id",
+            line_color="model_id",
+            line_dash="model_id",
+        )
+        assert captured["plot"].marker_color == FieldRef("model_id")
+        assert captured["plot"].line_color == FieldRef("model_id")
+        assert captured["plot"].line_dash == FieldRef("model_id")
+
+        sparkline(
+            FakeViz(),
+            y="stable_rank",
+            x="layer_id",
+            group_by="model_id",
+            marker_color="red",
+            line_color="red",
+            line_dash="dash",
+        )
+        assert captured["plot"].marker_color == "red"
+        assert captured["plot"].line_color == "red"
+        assert captured["plot"].line_dash == "dash"
 
 
 class TestClusterBarChart:

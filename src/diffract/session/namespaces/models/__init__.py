@@ -10,14 +10,18 @@ from typing import TYPE_CHECKING, Any
 from dependency_injector.wiring import Provide, inject
 
 from diffract.core.constants import TABLE_AGGREGATES, TABLE_PARAMETERS
+from diffract.core.data.identity import IdentifierValidationError
 from diffract.core.data.nn.extractors.base import ExtractorOverrides, ParameterOverrides
 from diffract.core.utils.exceptions import format_exception_message
+from diffract.session._identifiers import check_identifier
 from diffract.session.errors import (
+    InvalidIdentifierError,
     ModelAlreadyExistsError,
     ModelNotFoundError,
     SessionError,
 )
 from diffract.session.session import Session, SessionContext
+from diffract.session.summaries import EraseSummary
 
 from .parameters import ParametersNamespace
 
@@ -79,6 +83,8 @@ class ModelsNamespace:
 
         Raises:
             ModelAlreadyExistsError: If model_id already exists in the session.
+            InvalidIdentifierError: If model_id is not over the accepted
+                identifier alphabet.
             SessionError: If parameter extraction fails or yields no parameters.
         """
         with self.__session_or_context:
@@ -99,6 +105,8 @@ class ModelsNamespace:
 
             except SessionError:
                 raise
+            except IdentifierValidationError as e:
+                raise InvalidIdentifierError(str(e)) from e
             except Exception as e:
                 msg = f"Failed to add model: {format_exception_message(e)}"
                 raise SessionError(msg) from e
@@ -133,8 +141,12 @@ class ModelsNamespace:
         Raises:
             ModelNotFoundError: If model_id does not exist.
             ModelAlreadyExistsError: If new_model_id already exists.
+            InvalidIdentifierError: If new_model_id is not over the accepted
+                identifier alphabet.
         """
         with self.__session_or_context:
+            check_identifier(new_model_id, kind="model id")
+
             params = self.__param_repo.create_view()
             model_params = params.filter_by_model_id(model_id)
 
@@ -197,7 +209,7 @@ class ModelsNamespace:
         self,
         *model_ids: str,
         erase_all: bool = False,
-    ) -> None:
+    ) -> EraseSummary:
         """Erase all parameters and results for specified models.
 
         Removes model parameters from both memory and persistent storage.
@@ -206,6 +218,10 @@ class ModelsNamespace:
         Args:
             *model_ids: Model IDs to erase. Required if erase_all is False.
             erase_all: If True, erases all models. model_ids must be empty.
+
+        Returns:
+            An EraseSummary naming the erased models and the number of
+            parameter entries removed.
 
         Raises:
             ValueError: If neither model_ids nor erase_all is specified,
@@ -223,8 +239,12 @@ class ModelsNamespace:
             if erase_all:
                 model_ids = tuple(self.list())
 
-            params = self.__param_repo.create_view()
-            aggs = self.__agg_repo.create_view()
+            if isinstance(self.__session_or_context, Session):
+                params = self.__param_repo.create_view()
+                aggs = self.__agg_repo.create_view()
+            else:
+                params = self.__session_or_context._param_filter_context
+                aggs = self.__session_or_context._agg_filter_context
 
             erased_uids: list[str] = []
             for model_id in model_ids:
@@ -244,6 +264,8 @@ class ModelsNamespace:
                 logger.info("Erased model '%s'", model_id)
 
             self.__session_or_context._field_cache.remove_uids(erased_uids)
+
+            return EraseSummary(models=tuple(model_ids), affected_uids=len(erased_uids))
 
     def list(self) -> list[str]:
         """List all model IDs currently in the session.
@@ -267,6 +289,8 @@ class ModelsNamespace:
         extractor_overrides_kwargs: dict[str, Any] = {}
 
         if model_id:
+            check_identifier(model_id, kind="model id")
+
             params = self.__param_repo.create_view()
             model_params = params.filter_by_model_id(model_id)
 

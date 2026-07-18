@@ -6,10 +6,10 @@ container for parameter descriptive information.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from diffract.core.data.identity import STORAGE_UNSAFE_PATTERN
 from diffract.core.utils.hashing import get_unique_id
 
 from .schema import ParameterType
@@ -39,7 +39,7 @@ class ParameterMetadata:
     model_id: str
     other_meta: dict[str, Any] = field(default_factory=dict)
 
-    _FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*]')
+    _FORBIDDEN_CHARS = STORAGE_UNSAFE_PATTERN
 
     def __post_init__(self) -> None:
         """Validate metadata fields contain no forbidden characters."""

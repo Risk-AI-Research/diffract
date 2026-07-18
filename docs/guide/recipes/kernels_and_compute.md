@@ -40,6 +40,42 @@ Kernel configuration is process-global: the registry is a module-level singleton
 by all sessions in the process. Configuration set in one session applies to every other
 session and resets only when the interpreter restarts.
 
+### Reconfiguring after results are stored
+
+Configuration takes effect when a kernel executes; changing it does **not** invalidate
+results that are already stored. `apply` selects work by field presence alone: a
+parameter that already has the kernel's output fields is skipped, without comparing the
+stored values to the current configuration (stored values do not record the
+configuration they were computed with). Re-applying after `configure_kernel` is
+therefore a silent no-op that leaves the previous values in place. To recompute under
+the new configuration, erase the stored fields first:
+
+```python
+with session:
+    session.compute.configure_kernel("hard_rank", rtol=1e-9)
+    session.compute.apply("hard_rank")  # computes with rtol=1e-9
+
+    session.compute.configure_kernel("hard_rank", rtol=0.5)
+    session.compute.apply("hard_rank")  # no-op: "hard_rank" is already stored
+
+    session.results.erase("hard_rank")
+    session.compute.apply("hard_rank")  # recomputes with rtol=0.5
+```
+
+Two caveats when erasing:
+
+- **Erase a multi-output kernel's fields as a group.** A parameter is selected for
+  computation only when *all* of a kernel's output fields are absent. After erasing
+  only `weights_svals`, `apply` cannot restore it, because the sibling fields written
+  by the same kernel still exist. Erase the whole produce group together:
+  `erase("weights_lsvs", "weights_svals", "weights_rsvs")`.
+- **Stale dependents are not erased for you.** Fields computed from the reconfigured
+  kernel's outputs keep their stored values. Pass `erase_dependent_also=True` to also
+  erase every stored field downstream of the ones you name.
+
+When possible, configure kernels before the first `apply`; treat reconfiguration as an
+explicit erase-then-apply cycle.
+
 ## Dependency resolution
 
 Each kernel declares its **required input fields** and **output fields**. Diffract
@@ -77,6 +113,55 @@ Kernels operate at one of three levels:
 | `PARAMETER`   | Per parameter                        | `frob_norm` — Frobenius norm of each layer      |
 | `IN_MODEL`    | Per model (aggregates by `model_id`) | `param_norm` — sum of squared norms             |
 | `CROSS_MODEL` | Per parameter name across models     | `l_overlap` — compare layers across checkpoints |
+
+### Cross-model kernels compare exactly two models
+
+The alignment family — `l_overlap`, `r_overlap`, and the agreement metrics derived
+from them (`l_agreement`, `max_l_agreement`, `avg_l_agreement`,
+`avg_max_l_agreement`, and their right-basis `r_*` counterparts) — is
+**pairwise**: each compares one layer between two model versions. Scope the session to the pair with `filter(model_ids=[a, b])` before
+applying:
+
+```python
+with session:
+    pair = session.filter(model_ids=["checkpoint_1000", "checkpoint_2000"])
+    pair.compute.apply("l_agreement")  # l_overlap is resolved automatically
+```
+
+Applying a pairwise kernel with any other number of models in scope raises
+`ScopeValidationError` before any work runs, naming the scope and the fix:
+
+```python
+from diffract.session import ScopeValidationError
+
+with session:  # three models in scope
+    try:
+        session.compute.apply("l_overlap")
+    except ScopeValidationError as err:
+        print(err)
+        # Cannot produce 'l_overlap': it is a binary cross-model kernel that
+        # requires exactly two models in scope, but the current scope has 3:
+        # ['a', 'b', 'c']. Restrict the scope to a model pair, e.g.
+        # session.filter(model_ids=['a', 'b']).compute.apply('l_overlap').
+```
+
+The requirement is transitive: `l_agreement` reads `l_overlap`, so requesting
+`l_agreement` from a non-pair scope raises the same error and names the offending
+dependency (`l_overlap`).
+
+To compare more than two models, apply the kernel once per pair:
+
+```python
+from itertools import combinations
+
+with session:
+    checkpoints = ["step_1000", "step_2000", "step_3000"]
+    for earlier, later in combinations(checkpoints, 2):
+        session.filter(model_ids=[earlier, later]).compute.apply("avg_l_agreement")
+```
+
+See the [alignment metrics](../../reference/metrics/alignment.md) reference for the
+mathematics of the overlap and agreement fields.
 
 ### Contextual field names
 

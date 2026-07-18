@@ -67,13 +67,26 @@ class ParametersNamespace:
                     for param in params
                 ]
 
-            if self.__session_or_context._field_cache.is_valid:
-                field_cache = self.__session_or_context._field_cache.get()
+            cache = self.__session_or_context._field_cache
+            if cache.is_valid:
+                # A scoped read may have left the shared cache holding only a
+                # subset of uids; fetch any in-view uids it is missing rather
+                # than reporting them as having no fields.
+                fields_by_uid = cache.get()
+                required = set(params.list_uids())
+                missing = tuple(required - set(fields_by_uid.keys()))
+                if missing:
+                    cache.update(
+                        params[missing].list_fields_by_uid(
+                            parallel=self.__parallel_context_factory()
+                        )
+                    )
+                    fields_by_uid = cache.get()
             else:
-                field_cache = params.list_fields_by_uid(
+                fields_by_uid = params.list_fields_by_uid(
                     parallel=self.__parallel_context_factory()
                 )
-                self.__session_or_context._field_cache.set(field_cache)
+                cache.set(fields_by_uid)
 
             return [
                 {
@@ -81,7 +94,7 @@ class ParametersNamespace:
                     "name": param.meta.name,
                     "model_id": param.meta.model_id,
                     "parameter_type": param.meta.ptype.name,
-                    "available_fields": field_cache.get(param.meta.uid, []),
+                    "available_fields": fields_by_uid.get(param.meta.uid, []),
                     "other_meta": param.meta.other_meta,
                 }
                 for param in params

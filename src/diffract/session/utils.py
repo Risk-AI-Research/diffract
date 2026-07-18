@@ -1,6 +1,24 @@
+import difflib
+from collections.abc import Iterable
+
 from diffract.core.data.nn.aggregates.view import AggregateView
 from diffract.core.data.nn.params import ParameterType
 from diffract.core.data.nn.params.interface import IParameterView
+
+
+def did_you_mean(name: str, candidates: Iterable[str]) -> str:
+    """Return a " Did you mean: ...?" suffix for error messages, or "".
+
+    Args:
+        name: The unrecognized name as the user gave it.
+        candidates: Known names to suggest from.
+
+    Returns:
+        A suggestion clause with up to three close matches, or an empty
+        string when nothing is close enough.
+    """
+    close = difflib.get_close_matches(name, sorted(set(candidates)), n=3, cutoff=0.6)
+    return f" Did you mean: {', '.join(close)}?" if close else ""
 
 
 def filter_parameter_view(

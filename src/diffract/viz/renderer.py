@@ -25,7 +25,7 @@ from typing import (
 )
 
 from diffract.core.utils import imports as import_utils
-from diffract.viz.styling.sources import StyleLiteralKind
+from diffract.viz.styling.sources import StyleLiteralKind, is_style_literal
 
 if TYPE_CHECKING:  # pragma: no cover
     import plotly.graph_objects as go  # type: ignore[import-not-found]
@@ -275,20 +275,8 @@ def _style_literal_kind(annotation: Any) -> StyleLiteralKind | None:
     return None
 
 
-def _is_style_literal(value: str, kind: StyleLiteralKind) -> bool:
-    """True when the string is a valid plotly literal of the given kind."""
-    go = require_plotly_go()
-
-    try:
-        if kind is StyleLiteralKind.COLOR:
-            go.scatter.Marker(color=value)
-        elif kind is StyleLiteralKind.SYMBOL:
-            go.scatter.Marker(symbol=value)
-        else:
-            go.scatter.Line(dash=value)
-    except ValueError:
-        return False
-    return True
+# The probe lives in styling.sources; keep the private name for local callers.
+_is_style_literal = is_style_literal
 
 
 def _plot_supports_theme_kwarg(plot: Plot) -> bool:

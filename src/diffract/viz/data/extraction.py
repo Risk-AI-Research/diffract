@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from diffract.core.constants import CONTEXT_SEPARATOR, parse_contextual_field_name
+from diffract.session.resolver import FieldSelector, resolve
 
 from .detection import detect_field_meta
 from .types import DataShape, DataType, Entry, EntryContext
@@ -27,12 +26,13 @@ def get_field_value(ctx: EntryContext, field: str) -> Any:
     if value is not None:
         return value
 
-    agg_pattern = re.compile(rf"^{re.escape(field)}{re.escape(CONTEXT_SEPARATOR)}.+$")
+    requested = resolve(field)
 
-    candidates: list[tuple[str, Any]] = []
+    candidates: list[tuple[FieldSelector, str, Any]] = []
     for key_, value_ in ctx.fields.items():
-        if agg_pattern.match(key_):
-            candidates.append((key_, value_))
+        selector = resolve(key_)
+        if selector.is_contextual and _serves(requested, selector):
+            candidates.append((selector, key_, value_))
 
     if not candidates:
         raise ValueError(f"Field {field} not found in entry context")
@@ -76,8 +76,20 @@ def get_field_data(
     return values, meta.data_type, meta.data_shape
 
 
+def _serves(requested: FieldSelector, candidate: FieldSelector) -> bool:
+    """True when a stored contextual selector can serve the request.
+
+    Constrained components must match exactly; None is unconstrained.
+    """
+    if candidate.field != requested.field:
+        return False
+    if requested.models is not None and candidate.models != requested.models:
+        return False
+    return requested.params is None or candidate.params == requested.params
+
+
 def _select_best_contextual_field(
-    candidates: list[tuple[str, Any]],
+    candidates: list[tuple[FieldSelector, str, Any]],
     *,
     ctx: EntryContext,
 ) -> Any:
@@ -88,10 +100,11 @@ def _select_best_contextual_field(
     2. Among those, prefer smaller context size (more specific)
     3. Fallback: deterministic sort by field name
     """
-    scored: list[tuple[int, int, str, Any]] = []
+    scored: list[tuple[int, int, int, str, Any]] = []
 
-    for field_name, value in candidates:
-        _, models, params = parse_contextual_field_name(field_name)
+    for selector, field_name, value in candidates:
+        models = selector.models
+        params = selector.params
 
         model_match = models is None or (
             ctx.model_id is not None and ctx.model_id in models

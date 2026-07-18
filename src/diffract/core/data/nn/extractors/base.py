@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from diffract.core.constants import WEIGHTS_FIELD
+from diffract.core.data.identity import validate_identifier
 from diffract.core.data.nn.params.interface import IParameterRepository
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
@@ -244,6 +245,7 @@ class BaseParameterExtractor(IParameterExtractor, ABC):
             metadata["other_meta"].update(extra)
 
         self._apply_overrides(metadata)
+        validate_identifier(metadata["name"], kind="parameter name")
         return ParameterMetadata(**metadata)
 
     def _apply_overrides(self, metadata: dict[str, Any]) -> None:

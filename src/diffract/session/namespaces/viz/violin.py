@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from diffract.session.namespaces.viz._utils import _to_field_ref
+from diffract.session.namespaces.viz._utils import _to_field_ref, _to_style_source
 from diffract.viz.data import FieldRef
+from diffract.viz.styling.sources import StyleLiteralKind
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -161,9 +162,7 @@ def violin(
         jitter_offset=jitter_offset,
         jitter_seed=jitter_seed,
         jitter_density_scale=jitter_density_scale,
-        jitter_color=_to_field_ref(jitter_color)
-        if isinstance(jitter_color, str)
-        else jitter_color,
+        jitter_color=_to_style_source(jitter_color, StyleLiteralKind.COLOR),
         jitter_colorscale=jitter_colorscale,
         x_title=x_title,
         x_showticklabels=x_showticklabels,
@@ -206,7 +205,7 @@ def violin(
         if isinstance(marker_opacity, str)
         else marker_opacity,
         marker_opacity_range=marker_opacity_range,
-        marker_color=marker_color,
-        marker_symbol=marker_symbol,
+        marker_color=_to_style_source(marker_color, StyleLiteralKind.COLOR),
+        marker_symbol=_to_style_source(marker_symbol, StyleLiteralKind.SYMBOL),
     )
     return self.draw(plot=plot, theme=theme, theme_path=theme_path)

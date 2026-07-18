@@ -798,6 +798,9 @@ all = [
     { name = "taichi" },
     { name = "torch" },
 ]
+bench = [
+    { name = "psutil" },
+]
 common = [
     { name = "hydra-core" },
     { name = "kaleido" },
@@ -820,6 +823,7 @@ dev = [
     { name = "plotly" },
     { name = "polars" },
     { name = "pre-commit" },
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
@@ -941,6 +945,8 @@ requires-dist = [
     { name = "polars", marker = "extra == 'polars'", specifier = ">=0.20.0" },
     { name = "powerlaw", specifier = ">=1.5.0,<2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
+    { name = "psutil", marker = "extra == 'bench'", specifier = ">=5.9.0" },
+    { name = "psutil", marker = "extra == 'dev'", specifier = ">=5.9.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
@@ -978,7 +984,7 @@ requires-dist = [
     { name = "zarr", marker = "extra == 'dev'", specifier = ">=2.18.0" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=3.0.0" },
 ]
-provides-extras = ["all", "common", "dev", "docs", "flax", "frameworks", "notebooks", "onnx", "pandas", "polars", "redis", "taichi", "tensorflow", "torch", "viz", "zarr"]
+provides-extras = ["all", "bench", "common", "dev", "docs", "flax", "frameworks", "notebooks", "onnx", "pandas", "polars", "redis", "taichi", "tensorflow", "torch", "viz", "zarr"]
 
 [[package]]
 name = "dill"

@@ -181,8 +181,10 @@ class MainContainer(containers.DeclarativeContainer):
     # Configuration
     config = providers.Configuration()
 
-    # Logging configuration
-    logging_config = providers.Resource(
+    # Callable, not Resource: logging is configured once at build and must stay
+    # out of the init_resources()/shutdown_resources() lifecycle, which would
+    # otherwise re-run dictConfig on every context entry and reset user handlers.
+    logging_config = providers.Callable(
         "logging.config.dictConfig",
         config=config.logging,
     )
