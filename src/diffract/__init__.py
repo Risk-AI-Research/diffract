@@ -22,9 +22,10 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .containers import list_profiles
+from .core.data.metadata import upgrade_metadata_index
 from .core.data.nn.params.schema import ParameterType
 from .session import ParameterOverrides, Session
 
@@ -37,6 +38,7 @@ __all__ = [
     "Session",
     "__version__",
     "list_profiles",
+    "upgrade_metadata_index",
     "viz",
 ]
 
