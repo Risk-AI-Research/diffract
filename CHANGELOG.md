@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.3.1
+
+Hardens the session and storage layers: requests that cannot be served
+raise or warn with actionable messages, the mutating verbs report what
+they did, and the on-disk metadata index is schema-versioned with an
+explicit upgrade path.
+
+### Upgrading a persistent store
+
+A `local`/`hybrid` store written by an earlier release is refused at
+session start with `IncompatibleStoreError`; nothing is migrated
+implicitly. Back up the database file, then upgrade in place:
+
+```python
+import diffract
+
+diffract.upgrade_metadata_index("<path to metadata.db>")
+```
+
+The upgrade only adds the schema bookkeeping table — parameter and result
+data are untouched. In-memory (`ram`) sessions are unaffected. See the
+storage guide for the full schema-version contract.
+
+### Added
+
+- The mutating verbs return typed summaries: `compute.apply` returns an
+  `ApplySummary` grouping the written fields by apply level (and naming
+  skipped requests with a reason), `models.erase` and `results.erase`
+  return an `EraseSummary` (erased models/fields and the number of
+  parameter entries that lost data), and `compute.configure_kernel`
+  returns the effective `KernelConfig`.
+- Schema versioning for the SQLite metadata index (`PRAGMA user_version`):
+  fresh stores are stamped at the current version and record their
+  producer; `diffract.upgrade_metadata_index` applies pending migration
+  steps, each in its own transaction.
+- New typed errors on `diffract.session`: `ScopeValidationError`,
+  `InvalidIdentifierError`, `IncompatibleStoreError`.
+- `diffract.viz.styling.is_style_literal` — the public predicate behind
+  the string-vs-field rule for style properties.
+- A pipeline benchmark harness (`scripts/bench_pipeline.py`, `make bench`,
+  the `bench` extra): times the add / apply / export stages across storage
+  profiles and workload shapes on a pinned device, records peak RSS, and
+  doubles as a regression gate against a baseline report.
+- Documentation for the retrieval routing rule (`PARAMETER`-level fields
+  come back from `export_metrics`; `IN_MODEL` and `CROSS_MODEL` fields
+  from `export_aggregates`), the two-model scope of cross-model kernels,
+  kernel reconfiguration semantics (stored results are keyed by field
+  presence and are not invalidated by configuration changes), the
+  weight-slice schema boundary, and store schema versions.
+
+### Changed
+
+- Applying a binary cross-model kernel (the alignment/overlap family) with
+  anything other than exactly two models in scope raises
+  `ScopeValidationError` up front, naming the scope and the runnable fix.
+- Exports validate the requested field names: a name that neither a
+  registered kernel produces nor any stored field matches raises
+  `KernelNotFoundError` with did-you-mean suggestions, and a known field
+  with no values in the current scope logs a warning naming the exporter
+  and apply level that serve it.
+- Model ids and parameter names are validated at every ingest boundary
+  (ASCII letters, digits, `_`, `-`, `.`), and ingested field names reject
+  the storage-unsafe characters `< > : " / \ | ? *`; violations raise
+  `InvalidIdentifierError`. Merging a source session that carries invalid
+  identifiers is rejected with the same error.
+- Aggregate context members are stored in canonical sorted order, matching
+  the order the contextual field labels already use.
+- The viz wrappers (`scatter`, `box`, `violin`, `sparkline`) resolve
+  string style properties uniformly: a valid Plotly literal stays a
+  literal, any other string becomes a field reference, and an explicit
+  `FieldRef` is the escape hatch.
+- `diffract.core` does not re-export the contextual-grammar constants;
+  the session-layer resolver is the single interpreter of contextual
+  field labels.
+
+### Fixed
+
+- `models.erase` and `results.erase` operate on the active filtered scope:
+  erasing from `session.filter(...)` touches only in-scope entries.
+- A filtered export leaves the session-shared field cache consistent:
+  subsequent whole-session erases and parameter listings see every entry
+  with its real fields.
+- User logging configuration survives session use; the library configures
+  logging once when the container is built instead of on every namespace
+  call.
+- Unhandled plot ordering modes raise `ValueError` instead of silently
+  falling back to the unsorted order.
+- A dict-of-arrays model with non-string keys is rejected with a
+  `TypeError` naming the offending key types, whether or not a deep
+  learning framework is installed.
+
 ## 0.3.0
 
 Brings the spectral kernels into line with their mathematical definitions
