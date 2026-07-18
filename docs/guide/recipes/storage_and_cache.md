@@ -280,3 +280,28 @@ key_prefix = "diffract:myproject:"
 - **SQLite:** Uses connection pooling for reads, serialized writes. Safe for typical local workloads.
 - **HDF5:** Serialized writes, concurrent reads. Avoid multiple independent writers.
 - **Redis:** Configured for RAM-only LRU eviction. Data is not persisted.
+
+## Store schema versions
+
+The SQLite metadata index records its schema generation in the database
+(`PRAGMA user_version`). Fresh stores are created at the current version;
+a store written at an older schema version is refused at open time with
+`IncompatibleStoreError` — nothing is migrated implicitly.
+
+Upgrade a refused store explicitly:
+
+```python
+import diffract
+
+diffract.upgrade_metadata_index(".diffract/sqlite/metadata_index.db")
+```
+
+The path is the `[metadata.sqlite] path` of your config; the value shown
+is the `local` profile default. The refusal message prints the exact
+call for your store.
+
+Back up the database file first: migration steps commit independently, so
+a failure between steps leaves the store at an intermediate version (a
+re-run continues from there). A store written by a *newer* release is also
+refused; the remedy there is upgrading the library, not the store.
+In-memory (`ram`) sessions carry no persistent index and are unaffected.

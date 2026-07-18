@@ -4,7 +4,7 @@ UV := $(shell if [ -x ./.venv/bin/uv ]; then echo ./.venv/bin/uv; \
 PYTHON ?= 3.12
 LINT_PATHS := src/diffract tests conftest.py
 .DEFAULT_GOAL := help
-.PHONY: help install install-dev install-full lint lint-unsafe lint-check format format-check mypy test test-light test-integration test-stress docs docs-serve docs-clean lock clean clean-all check coverage-open
+.PHONY: help install install-dev install-full lint lint-unsafe lint-check format format-check mypy test test-light test-integration test-stress bench docs docs-serve docs-clean lock clean clean-all check coverage-open
 
 help: ## Show available make targets
 	@printf "Available targets:\n"
@@ -21,6 +21,7 @@ help: ## Show available make targets
 	@printf "  test-light    \tRun unit tests only (no integration/stress)\n"
 	@printf "  test-integration \tRun integration tests\n"
 	@printf "  test-stress   \tRun stress tests (slow, resource-intensive)\n"
+	@printf "  bench         \tRun the pipeline timing/memory benchmark (BENCH_ARGS=...)\n"
 	@printf "  docs          \tBuild docs (requires docs/ tree)\n"
 	@printf "  docs-serve    \tLive-reload docs and open browser\n"
 	@printf "  docs-clean    \tRemove docs build artifacts\n"
@@ -37,7 +38,7 @@ install-dev: ## Install all dependencies (including dev)
 	$(UV) sync --extra dev
 
 install-full: ## Install all dependencies including all extras
-	$(UV) sync --extra common --extra dev --extra torch --extra redis --extra viz --extra pandas --extra polars --extra zarr --extra notebooks --extra taichi --extra docs
+	$(UV) sync --extra common --extra dev --extra torch --extra redis --extra viz --extra pandas --extra polars --extra zarr --extra notebooks --extra taichi --extra bench --extra docs
 
 lint: ## Run ruff on the source tree
 	$(UV) run --extra dev ruff check $(LINT_PATHS) --fix
@@ -69,6 +70,9 @@ test-integration: ## Run integration tests
 
 test-stress: ## Run stress tests (slow, resource-intensive)
 	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra dev --extra torch --extra redis --extra frameworks --extra viz --extra pandas --extra polars pytest -m "stress" tests
+
+bench: ## Run the pipeline timing/memory benchmark (pass BENCH_ARGS="--quick")
+	PYTHONPATH=src $(UV) run --python $(PYTHON) --extra bench python scripts/bench_pipeline.py $(BENCH_ARGS)
 
 check: ## Run lint and mypy
 	$(MAKE) lint

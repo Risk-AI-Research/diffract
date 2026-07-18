@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 from unittest.mock import patch
 
@@ -5,10 +6,10 @@ import numpy as np
 import pytest
 
 from diffract.core.compute.exceptions import KernelExecutionError
-from diffract.core.compute.execution.aggregation import AggregationContext
 from diffract.core.compute.execution.enums import (
     KernelApplyLevel,
     KernelExecutionProtocol,
+    KernelRestrictions,
 )
 from diffract.core.compute.execution.executor import KernelExecutor
 from diffract.core.compute.execution.utils import (
@@ -308,15 +309,6 @@ def executor(registry, aggregate_repo):
     return KernelExecutor(registry=registry, aggregate_repository=aggregate_repo)
 
 
-# ----------------- AggregationContext tests -----------------
-
-
-def test_aggregation_context_suffix_and_field():
-    ctx = AggregationContext(models=("m2", "m1"), parameters=("p2", "p1"))
-    assert ctx.to_field_suffix() == "models[m1,m2]@params[p1,p2]"
-    assert ctx.create_field_name("k") == "k@models[m1,m2]@params[p1,p2]"
-
-
 # ----------------- parameter-level execution -----------------
 
 
@@ -543,6 +535,80 @@ def test_cross_model_aggregation(executor, registry, aggregate_repo):
         context_params=("q",),
     )
     assert agg_q.get_field("value") == 8 * 2
+
+
+# ----------------- aggregation: BINARY cross-model restriction -----------------
+
+
+def _register_binary_pair_kernel(registry):
+    def pair_sum(vs: tuple[int, ...]) -> int:
+        return int(np.sum(np.array(vs)).item())
+
+    registry.register_kernel(
+        name="pair_metric",
+        require_fields=("x",),
+        produce_fields=("pair_metric",),
+        implementation=pair_sum,
+        apply_level=KernelApplyLevel.CROSS_MODEL,
+        execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
+        restrictions=KernelRestrictions.BINARY,
+        config=registry._split_signature(pair_sum)[1],
+    )
+
+
+def test_binary_cross_model_two_models_writes_and_reports(
+    executor, registry, aggregate_repo
+):
+    """A binary cross-model kernel on exactly two models computes, stores the
+    hand-computed value, and reports the produced field as written."""
+    _register_binary_pair_kernel(registry)
+
+    params, _ = make_view([("p", "m1", {"x": 2}), ("p", "m2", {"x": 5})])
+
+    written = executor.execute("pair_metric", params)
+
+    assert written == {"pair_metric"}
+    agg = aggregate_repo.get_or_create(
+        field_name="pair_metric",
+        context_models=("m1", "m2"),
+        context_params=("p",),
+    )
+    assert agg.get_field("value") == 2 + 5
+
+
+def test_binary_cross_model_three_models_skips_loudly_without_writing(
+    executor, registry, aggregate_repo, caplog
+):
+    """Three models cannot form a pair: the group is skipped (nothing written)
+    with a WARNING, never a silent no-op."""
+    _register_binary_pair_kernel(registry)
+
+    params, _ = make_view(
+        [
+            ("p", "m1", {"x": 2}),
+            ("p", "m2", {"x": 5}),
+            ("p", "m3", {"x": 9}),
+        ]
+    )
+
+    # The diffract package loggers can be configured non-propagating elsewhere in
+    # the suite, so attach caplog's handler to the exact logger.
+    restrictions_logger = logging.getLogger(
+        "diffract.core.compute.execution.restrictions"
+    )
+    restrictions_logger.addHandler(caplog.handler)
+    previous_level = restrictions_logger.level
+    restrictions_logger.setLevel(logging.WARNING)
+    try:
+        written = executor.execute("pair_metric", params)
+    finally:
+        restrictions_logger.setLevel(previous_level)
+        restrictions_logger.removeHandler(caplog.handler)
+
+    assert written == set()
+    assert "binary cross-model kernel" in caplog.text
+    # The three-model group was not written to the aggregate repository.
+    assert aggregate_repo.create_view().list_uids() == []
 
 
 # ----------------- contextual fields depending on contextual fields -----------------

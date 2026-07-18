@@ -68,7 +68,8 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
     Raises:
         ImportError: If the model is not a NumPy dict and no supported
             frameworks are available.
-        TypeError: If model type is not supported by any available framework.
+        TypeError: If a dict of arrays carries non-string keys, or the
+            model type is not supported by any available framework.
 
     Example:
         >>> extractor = create_extractor(torch_model)
@@ -87,6 +88,24 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
         )
 
         return NumpyDictExtractor(*args, model=model, **kwargs)
+
+    # An array dict with non-string keys is an invalid numpy-dict input, not
+    # a framework model; rejecting it here keeps the outcome identical
+    # whether or not any framework is installed.
+    if (
+        isinstance(model, dict)
+        and model
+        and all(isinstance(value, np.ndarray) for value in model.values())
+    ):
+        key_types = sorted(
+            {type(name).__name__ for name in model if not isinstance(name, str)}
+        )
+        msg = (
+            "Array dict keys must be parameter-name strings; got key "
+            f"type(s): {', '.join(key_types)}. "
+            "Pass a dict[str, numpy.ndarray] of weight matrices."
+        )
+        raise TypeError(msg)
 
     if not get_supported_frameworks():
         msg = (

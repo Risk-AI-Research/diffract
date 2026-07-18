@@ -30,6 +30,21 @@ Diffract extracts parameters and stores them. Supported frameworks: PyTorch,
 TensorFlow, Flax, ONNX. A plain `dict[str, numpy.ndarray]` of weight matrices
 also works, without any framework installed.
 
+(naming-rules)=
+
+### Naming rules
+
+A `model_id` and a parameter name may contain only ASCII letters, digits, and
+the characters `_`, `-`, and `.`. This excludes the characters `@`, `[`, `]`,
+and `,` (reserved for the aggregate-context grammar) and `/` (the storage-key
+path separator). The same alphabet applies wherever identifiers enter the
+session — `models.add`, `models.rename`, `results.ingest_aggregates`, and
+`utils.merge_other_session`. A violating identifier raises
+{py:exc}`~diffract.session.InvalidIdentifierError`, naming the offending
+character, rather than silently corrupting downstream keys. Field names passed
+to `results.ingest_metrics` are held to the narrower rule that they must not
+contain `/` or the other storage-hostile characters `< > : " \ | ? *`.
+
 ## 3. Compute fields
 
 ```python
@@ -44,8 +59,9 @@ Diffract resolves dependencies and executes kernels. Results are stored automati
 ```python
 with session:
     results = session.results.export_metrics(
-        "frob_norm", "stable_rank",
-        export_format="dict"  # or "pandas", "polars", "json", "list"
+        "frob_norm",
+        "stable_rank",
+        export_format="dict",  # or "pandas", "polars", "json", "list"
     )
 ```
 
@@ -69,14 +85,13 @@ session = Session(profile="local")
 with session:
     # Add your model
     session.models.add(model, model_id="gpt2-small")
-    
+
     # Compute metrics
     session.compute.apply("frob_norm", "stable_rank", "effective_rank")
-    
+
     # Export results
     df = session.results.export_metrics(
-        "frob_norm", "stable_rank", "effective_rank",
-        export_format="pandas"
+        "frob_norm", "stable_rank", "effective_rank", export_format="pandas"
     )
     print(df.head())
 ```

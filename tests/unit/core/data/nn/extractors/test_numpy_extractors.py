@@ -83,8 +83,8 @@ def test_factory_dispatches_empty_dict() -> None:
 
 
 def test_factory_rejects_non_string_keys() -> None:
-    try:
-        extractor = create_extractor({1: np.ones((2, 2))})
-    except TypeError:
-        return
-    assert not isinstance(extractor, NumpyDictExtractor)
+    """An array dict with non-string keys raises the same actionable
+    TypeError whether or not any framework is installed — it must never
+    reach the framework branches or the no-frameworks ImportError guard."""
+    with pytest.raises(TypeError, match="keys must be parameter-name strings"):
+        create_extractor({1: np.ones((2, 2))})

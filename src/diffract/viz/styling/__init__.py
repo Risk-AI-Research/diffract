@@ -25,6 +25,7 @@ from .sources import (
     DashSource,
     StyleLiteralKind,
     SymbolSource,
+    is_style_literal,
 )
 
 # Theme
@@ -75,4 +76,5 @@ __all__ = [
     "Theme",
     "TypographyStyle",
     "apply_theme",
+    "is_style_literal",
 ]

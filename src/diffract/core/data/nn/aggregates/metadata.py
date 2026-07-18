@@ -78,10 +78,11 @@ class AggregateMetadata:
         context_models: tuple[str, ...],
         context_params: tuple[str, ...],
     ) -> str:
-        """Create a deterministic UID from the aggregate context.
+        """Create the deterministic aggregate uid for a context.
 
-        This allows deduplication of aggregates with the same context.
-        Uses the same format as contextual field names in constants.py.
+        The single composer of the legacy uid grammar
+        (``field@models[m1,m2]@params[p1]``, context members sorted); only
+        the session resolver interprets the produced string.
 
         Args:
             field_name: Base field name of the aggregate.
@@ -91,6 +92,9 @@ class AggregateMetadata:
         Returns:
             A deterministic UID string based on the context.
         """
-        from diffract.core.constants import format_contextual_field_name
-
-        return format_contextual_field_name(field_name, context_models, context_params)
+        parts = [field_name]
+        if context_models:
+            parts.append(f"models[{','.join(sorted(context_models))}]")
+        if context_params:
+            parts.append(f"params[{','.join(sorted(context_params))}]")
+        return "@".join(parts)

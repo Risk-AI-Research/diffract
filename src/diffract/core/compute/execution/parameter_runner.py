@@ -43,12 +43,16 @@ class ParameterKernelRunner:
         self._process_pool = process_pool
         self._parallel = parallel
 
-    def run(self, kernel_name: str, parameters: IParameterView) -> None:
+    def run(self, kernel_name: str, parameters: IParameterView) -> set[str]:
         """Execute kernel on individual parameters.
 
         Args:
             kernel_name: Name of the registered kernel.
             parameters: Parameter collection to process.
+
+        Returns:
+            The set of field names actually written to storage (empty when
+            every parameter already had the target fields or nothing matched).
         """
         target_fields = self._registry.get_fields_kernel_produce(kernel_name)
         pending = parameters.filter_by_fields(
@@ -60,7 +64,7 @@ class ParameterKernelRunner:
             logger.debug(
                 "Skip execution of kernel '%s': no pending parameters", kernel_name
             )
-            return
+            return set()
 
         logger.info("Executing kernel '%s'", kernel_name)
 
@@ -74,17 +78,22 @@ class ParameterKernelRunner:
             )
         )
         if not chunks:
-            return
+            return set()
 
+        written: set[str] = set()
         for chunk in chunks:
             chunk.prefetch_fields(fields=required_fields, parallel=self._parallel)
-            self._execute_batch(kernel_name, chunk)
+            written |= self._execute_batch(kernel_name, chunk)
+        return written
 
-    def _execute_batch(self, kernel_name: str, batch: IParameterView) -> None:
+    def _execute_batch(self, kernel_name: str, batch: IParameterView) -> set[str]:
         """Execute parameter-level kernel on a batch with streaming writes.
 
         Results are written immediately as they become available, reducing
         memory pressure for heavy computations (e.g., SVD matrices).
+
+        Returns:
+            The set of field names written for this batch.
         """
         required_args = self._registry.get_fields_kernel_require(kernel_name)
         tasks: dict[tuple[str, str], tuple[Any, ...]] = {}
@@ -99,16 +108,19 @@ class ParameterKernelRunner:
             self._registry.get_kernel_restrictions(kernel_name),
         )
         if not tasks:
-            return
+            return set()
 
         param_lookup = {(p.meta.model_id, p.meta.uid): p for p in batch}
 
+        written: set[str] = set()
         with batch:
             for key, result in self._stream_results(kernel_name, tasks):
                 normalized = self._registry.normalize_kernel_result(kernel_name, result)
                 param = param_lookup[key]
                 for field_name, value in normalized.items():
                     param.set_field(field_name, value)
+                    written.add(field_name)
+        return written
 
     def _stream_results(
         self,

@@ -52,28 +52,35 @@ class AggregationKernelRunner:
         self._parallel = parallel
         self._aggregate_repository = aggregate_repository
 
-    def run(self, kernel_name: str, parameters: IParameterView) -> None:
+    def run(self, kernel_name: str, parameters: IParameterView) -> set[str]:
         """Execute kernel with aggregation across models or parameters.
 
         Args:
             kernel_name: Name of the registered kernel.
             parameters: Parameter collection to process.
+
+        Returns:
+            The set of field names actually written to the aggregate
+            repository (empty when every group was already computed, dropped by
+            a restriction, or there is no repository configured).
         """
         pending_groups = self._collect_pending_groups(kernel_name, parameters)
         if not pending_groups:
             logger.debug(
                 "Skip execution of kernel '%s': no pending groups", kernel_name
             )
-            return
+            return set()
 
         logger.info(
             "Executing kernel '%s' (%d groups)", kernel_name, len(pending_groups)
         )
 
+        written: set[str] = set()
         batches = self._batch_groups_by_budget(pending_groups, parameters)
         for batch in batches:
             self._prefetch_batch(batch, parameters)
-            self._execute_batch(kernel_name, batch)
+            written |= self._execute_batch(kernel_name, batch)
+        return written
 
     def _collect_pending_groups(
         self, kernel_name: str, parameters: IParameterView
@@ -250,8 +257,12 @@ class AggregationKernelRunner:
                 aggregate_uids.append(uid)
         return aggregate_uids
 
-    def _execute_batch(self, kernel_name: str, batch: list[PendingGroup]) -> None:
-        """Execute aggregation-level kernel on a batch with streaming writes."""
+    def _execute_batch(self, kernel_name: str, batch: list[PendingGroup]) -> set[str]:
+        """Execute aggregation-level kernel on a batch with streaming writes.
+
+        Returns:
+            The set of field names written for this batch.
+        """
         required_args = self._registry.get_fields_kernel_require(kernel_name)
         tasks: dict[tuple[str, AggregationContext], tuple[Any, ...]] = {}
 
@@ -265,12 +276,13 @@ class AggregationKernelRunner:
             self._registry.get_kernel_restrictions(kernel_name),
         )
         if not tasks:
-            return
+            return set()
 
         if self._aggregate_repository is None:
             msg = "AggregateRepository required for aggregation kernels"
             raise RuntimeError(msg)
 
+        written: set[str] = set()
         with self._aggregate_repository:
             for (group_id, context), result in self._stream_results(kernel_name, tasks):
                 logger.debug(
@@ -278,7 +290,8 @@ class AggregationKernelRunner:
                     kernel_name,
                     group_id,
                 )
-                self._store_result(kernel_name, context, result)
+                written |= self._store_result(kernel_name, context, result)
+        return written
 
     def _build_task_args(
         self, required_args: tuple[str, ...], group: PendingGroup
@@ -311,35 +324,36 @@ class AggregationKernelRunner:
         self, field_name: str, context: AggregationContext
     ) -> Any:
         """Read an aggregate value from AggregateRepository."""
-        if self._aggregate_repository is None:
-            contextual_name = context.create_field_name(field_name)
-            msg = f"AggregateRepository not configured, cannot read '{contextual_name}'"
-            raise KeyError(msg)
-
         uid = AggregateMetadata.create_uid_from_context(
             field_name=field_name,
             context_models=context.models or (),
             context_params=context.parameters or (),
         )
 
+        if self._aggregate_repository is None:
+            msg = f"AggregateRepository not configured, cannot read '{uid}'"
+            raise KeyError(msg)
+
         try:
             aggregate = self._aggregate_repository.get_proxy(uid)
         except KeyError:
-            contextual_name = context.create_field_name(field_name)
-            msg = f"Missing contextual dependency '{contextual_name}'"
+            msg = f"Missing contextual dependency '{uid}'"
             raise KeyError(msg) from None
 
         if not aggregate.has_field("value"):
-            contextual_name = context.create_field_name(field_name)
-            msg = f"Aggregate '{contextual_name}' exists but has no value"
+            msg = f"Aggregate '{uid}' exists but has no value"
             raise KeyError(msg)
 
         return aggregate.get_field("value")
 
     def _store_result(
         self, kernel_name: str, context: AggregationContext, result: Any
-    ) -> None:
-        """Store kernel result in aggregate repository."""
+    ) -> set[str]:
+        """Store kernel result in aggregate repository.
+
+        Returns:
+            The set of field names written for this result.
+        """
         normalized = self._registry.normalize_kernel_result(kernel_name, result)
         for field_name, value in normalized.items():
             aggregate = self._aggregate_repository.get_or_create(
@@ -348,6 +362,7 @@ class AggregationKernelRunner:
                 context_params=context.parameters or (),
             )
             aggregate.set_field("value", value)
+        return set(normalized.keys())
 
     def _stream_results(
         self, kernel_name: str, tasks: dict[Any, tuple[Any, ...]]

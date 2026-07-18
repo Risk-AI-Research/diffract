@@ -82,7 +82,7 @@ class Ordering:
             else:
                 indices = np.argsort([self.key(v) for v in unique])
 
-        elif True:
+        elif self.mode == OrderMode.CUSTOM:
             if self.custom_order is None:
                 indices = np.arange(len(unique))
             else:
@@ -93,7 +93,7 @@ class Ordering:
                 indices = np.argsort(priorities)
 
         else:
-            indices = np.arange(len(unique))
+            raise ValueError(f"Unhandled order mode: {self.mode!r}")
 
         if self.descending:
             indices = indices[::-1].copy()

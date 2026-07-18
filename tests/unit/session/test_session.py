@@ -9,6 +9,7 @@ import pytest
 
 from diffract.containers import WiringConfiguration, create_main_container
 from diffract.core import WEIGHTS_FIELD
+from diffract.core.compute import KernelConfig
 from diffract.core.compute.execution.enums import (
     KernelApplyLevel,
     KernelExecutionProtocol,
@@ -18,7 +19,12 @@ from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.schema import ParameterType
 from diffract.core.utils import imports as import_utils
-from diffract.session import KernelNotFoundError, Session, SessionError
+from diffract.session import (
+    KernelNotFoundError,
+    ModelNotFoundError,
+    Session,
+    SessionError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +65,42 @@ skip_not_implemented_types = true
 """.strip()
         + "\n"
     )
+
+
+def _session_with_sum_metric(temp_dir: Path) -> tuple[Session, ParameterMetadata]:
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+
+    container = create_main_container(cfg)
+    container.storage.storage_manager()
+    repository = container.nn.parameter_repository()
+    container.cache.cache_manager()
+
+    meta = ParameterMetadata(
+        uid="p0", name="layer.0.weight", ptype=ParameterType.DENSE, model_id="m1"
+    )
+    proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repository)
+    proxy.set_field(WEIGHTS_FIELD, np.arange(6, dtype=np.float32).reshape(2, 3))
+
+    registry = container.compute_singleton.kernel_registry()
+    if not registry.can_produce_field("sum_metric"):
+
+        def sum_metric(w: np.ndarray) -> float:
+            return float(np.sum(w))
+
+        _, cfg_dict = registry._split_signature(sum_metric)
+        registry.register_kernel(
+            name="sum_metric",
+            require_fields=("weights",),
+            produce_fields=("sum_metric",),
+            implementation=sum_metric,
+            apply_level=KernelApplyLevel.PARAMETER,
+            execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
+            restrictions=None,
+            config=cfg_dict,
+        )
+
+    return Session(container=container), meta
 
 
 def test_session_compute_and_get_results_roundtrip(temp_dir: Path) -> None:
@@ -107,6 +149,66 @@ def test_session_compute_and_get_results_roundtrip(temp_dir: Path) -> None:
     scalars = session.results.export_metrics("w_sum", export_format="dict")
     assert meta.uid in scalars
     assert scalars[meta.uid]["fields"]["w_sum"] == float(np.sum(weights))
+
+
+def test_apply_returns_plane_classified_summary(temp_dir: Path) -> None:
+    session, _ = _session_with_sum_metric(temp_dir)
+
+    summary = session.compute.apply("sum_metric")
+
+    assert "sum_metric" in summary.parameter_fields
+    assert summary.in_model_fields == ()
+    assert summary.cross_model_fields == ()
+    assert summary.skipped == ()
+
+
+def test_apply_reports_skipped_when_nothing_written(temp_dir: Path) -> None:
+    session, _ = _session_with_sum_metric(temp_dir)
+
+    session.compute.apply("sum_metric")
+    summary = session.compute.apply("sum_metric")
+
+    assert summary.parameter_fields == ()
+    assert [name for name, _ in summary.skipped] == ["sum_metric"]
+
+
+def test_results_erase_returns_summary(temp_dir: Path) -> None:
+    session, _ = _session_with_sum_metric(temp_dir)
+    session.compute.apply("sum_metric")
+
+    summary = session.results.erase("sum_metric")
+
+    assert summary.fields == ("sum_metric",)
+    assert summary.affected_uids == 1
+
+
+def test_results_erase_counts_only_entries_that_held_the_field(temp_dir: Path) -> None:
+    """affected_uids reports entries that lose data, not the scope size."""
+    session, _ = _session_with_sum_metric(temp_dir)
+    session.models.add({"layer.w": np.ones((2, 2), dtype=np.float32)}, model_id="m2")
+
+    session.filter(model_ids=["m1"]).compute.apply("sum_metric")
+    summary = session.results.erase("sum_metric")
+
+    assert summary.fields == ("sum_metric",)
+    assert summary.affected_uids == 1
+
+
+def test_models_erase_returns_summary(temp_dir: Path) -> None:
+    session, _ = _session_with_sum_metric(temp_dir)
+
+    summary = session.models.erase("m1")
+
+    assert summary.models == ("m1",)
+    assert summary.affected_uids == 1
+
+
+def test_configure_kernel_returns_effective_config(temp_dir: Path) -> None:
+    session, _ = _session_with_sum_metric(temp_dir)
+
+    config = session.compute.configure_kernel("sum_metric")
+
+    assert isinstance(config, KernelConfig)
 
 
 def test_session_compute_raises_on_unknown_kernel(temp_dir: Path) -> None:
@@ -745,6 +847,32 @@ def test_session_ingest_aggregates_creates_aggregates(temp_dir: Path) -> None:
     assert aggregates[0]["context_params"] == ("layer.weight",)
 
 
+def test_session_ingest_aggregates_canonicalizes_context_order(
+    temp_dir: Path,
+) -> None:
+    """Unsorted ingest context is stored in the uid's canonical (sorted) order."""
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+
+    session = Session(container=create_main_container(cfg))
+
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "l_overlap",
+                "context_models": ("m2", "m1"),
+                "context_params": ("b.weight", "a.weight"),
+                "value": np.eye(3),
+            }
+        ]
+    )
+
+    aggregates = session.results.export_aggregates("l_overlap", export_format="list")
+    assert len(aggregates) == 1
+    assert aggregates[0]["context_models"] == ("m1", "m2")
+    assert aggregates[0]["context_params"] == ("a.weight", "b.weight")
+
+
 def test_session_ingest_aggregates_conflict_raises(temp_dir: Path) -> None:
     """Test that ingest_aggregates raises on conflict when force=False."""
     cfg = temp_dir / "cfg.ini"
@@ -913,6 +1041,61 @@ def test_session_erase_models_removes_aggregates(temp_dir: Path) -> None:
     assert aggregates[0]["field"] == "r_overlap"
 
 
+def _seed_three_models(cfg: Path) -> Session:
+    """Seed a session with three single-parameter numpy models (a, b, c)."""
+    session = Session(container=create_main_container(cfg))
+    rng = np.random.default_rng(0)
+    for model_id in ("a", "b", "c"):
+        session.models.add({"w.weight": rng.random((4, 4))}, model_id=model_id)
+    return session
+
+
+def test_erase_from_filtered_context_rejects_out_of_scope_model(
+    temp_dir: Path,
+) -> None:
+    """A filtered scope is a sandbox: erasing a model outside the scope must
+    raise rather than silently destroy it or its aggregates."""
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+    session = _seed_three_models(cfg)
+
+    session.results.ingest_aggregates(
+        [
+            {
+                "field_name": "bc_overlap",
+                "context_models": ("b", "c"),
+                "value": np.ones((2, 2)),
+            },
+        ]
+    )
+
+    scoped = session.filter(model_ids=["a"])
+    with pytest.raises(ModelNotFoundError, match="'b'"):
+        scoped.models.erase("b")
+
+    # No data loss: model 'b' and its aggregate both survive the rejected erase.
+    assert session.models.list() == ["a", "b", "c"]
+    assert (
+        len(session.results.export_aggregates("bc_overlap", export_format="list")) == 1
+    )
+
+
+def test_erase_from_filtered_context_honors_scope(temp_dir: Path) -> None:
+    """An in-scope erase from a filtered context removes only the scoped model;
+    erase_all from the same context is likewise confined to the scope."""
+    cfg_single = temp_dir / "single.ini"
+    _write_ram_config(cfg_single)
+    session = _seed_three_models(cfg_single)
+    session.filter(model_ids=["a"]).models.erase("a")
+    assert session.models.list() == ["b", "c"]
+
+    cfg_all = temp_dir / "all.ini"
+    _write_ram_config(cfg_all)
+    session = _seed_three_models(cfg_all)
+    session.filter(model_ids=["a", "b"]).models.erase(erase_all=True)
+    assert session.models.list() == ["c"]
+
+
 def test_session_merge_copies_aggregates(temp_dir: Path) -> None:
     """Test that merge copies aggregates from source session."""
     cfg_a = temp_dir / "a.ini"
@@ -990,3 +1173,93 @@ def test_session_list_aggregates_filters_by_model_ids(temp_dir: Path) -> None:
     context_models_set = {frozenset(a["context_models"]) for a in filtered}
     assert frozenset(("m1", "m2")) in context_models_set
     assert frozenset(("m3", "m4")) in context_models_set
+
+
+def _two_model_session_with_scope_sum(temp_dir: Path) -> Session:
+    """Build a ram Session with two single-parameter models and a computed field.
+
+    Both models carry one DENSE weight; a ``scope_sum`` kernel produces one
+    scalar per parameter. Returns the session after that field is computed.
+    """
+    cfg = temp_dir / "cfg.ini"
+    _write_ram_config(cfg)
+
+    container = create_main_container(cfg)
+    container.storage.storage_manager()
+    repository = container.nn.parameter_repository()
+    container.cache.cache_manager()
+
+    for model_id, uid in (("a", "pa"), ("b", "pb")):
+        meta = ParameterMetadata(
+            uid=uid,
+            name="layer.weight",
+            ptype=ParameterType.DENSE,
+            model_id=model_id,
+        )
+        proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repository)
+        proxy.set_field(WEIGHTS_FIELD, np.arange(6, dtype=np.float32).reshape(2, 3))
+
+    registry = container.compute_singleton.kernel_registry()
+
+    def scope_sum(w: np.ndarray) -> float:
+        return float(np.sum(w))
+
+    _req, cfg_dict = registry._split_signature(scope_sum)
+    registry.register_kernel(
+        name="scope_sum",
+        require_fields=("weights",),
+        produce_fields=("scope_sum",),
+        implementation=scope_sum,
+        apply_level=KernelApplyLevel.PARAMETER,
+        execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
+        restrictions=None,
+        config=cfg_dict,
+    )
+
+    session = Session(container=container)
+    session.compute.apply("scope_sum")
+    return session
+
+
+def test_filtered_export_then_session_erase_stays_consistent(temp_dir: Path) -> None:
+    """A scoped export must not corrupt the shared cache into an erase crash.
+
+    ``filter(...).results.export_metrics(...)`` seeds the session-shared
+    field cache with only the in-scope subset; a subsequent whole-session
+    ``erase`` visits every uid, including those the cache never saw, and
+    must treat the cache as a possibly-partial optimization — never as the
+    uid universe.
+    """
+    session = _two_model_session_with_scope_sum(temp_dir)
+
+    # Seed the shared cache with only model 'a'.
+    session.filter(model_ids=["a"]).results.export_metrics("scope_sum")
+
+    # Whole-session erase must complete without raising.
+    session.results.erase("scope_sum")
+
+    # And it must have actually erased the field for BOTH models — no
+    # mutate-then-raise leaving the session in a half-applied state.
+    remaining = session.results.export_metrics("scope_sum", export_format="dict")
+    for uid, entry in remaining.items():
+        assert "scope_sum" not in entry["fields"], uid
+
+
+def test_filtered_export_does_not_corrupt_list_verbose(temp_dir: Path) -> None:
+    """A scoped export must not make out-of-scope fields vanish from list().
+
+    After a scoped export seeds the shared cache with only the in-scope
+    subset, ``models.parameters.list(verbose=True)`` must still report the
+    real ``available_fields`` of every out-of-scope parameter — the partial
+    cache must be completed, not trusted.
+    """
+    session = _two_model_session_with_scope_sum(temp_dir)
+
+    # Seed the shared cache with only model 'a'.
+    session.filter(model_ids=["a"]).results.export_metrics("scope_sum")
+
+    rows = {r["uid"]: r for r in session.models.parameters.list(verbose=True)}
+
+    # The out-of-scope parameter must still report its real computed field.
+    assert "scope_sum" in rows["pb"]["available_fields"]
+    assert "scope_sum" in rows["pa"]["available_fields"]

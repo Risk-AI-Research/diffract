@@ -2,15 +2,34 @@
 
 Export computed fields in various formats.
 
+## Metrics vs. aggregates: which exporter
+
+A field's apply level decides which exporter returns it:
+
+| Apply level               | Exporter                      |
+| ------------------------- | ----------------------------- |
+| `PARAMETER`               | `results.export_metrics()`    |
+| `IN_MODEL`, `CROSS_MODEL` | `results.export_aggregates()` |
+
+`PARAMETER` fields are per-parameter scalars; `IN_MODEL` and `CROSS_MODEL`
+fields are aggregates keyed by their model and parameter context. Each field's
+apply level is listed in the [metric catalog](../../reference/metrics/catalog.md);
+the levels themselves are described under
+[Apply levels](kernels_and_compute.md#apply-levels).
+
+Requesting a field from the wrong exporter returns nothing (with a warning)
+rather than raising, so an unexpectedly empty result usually means the field is
+served by the other exporter.
+
 ## Available formats
 
-| Format | Extra required | Description |
-|--------|----------------|-------------|
-| `dict` | — | Nested Python dictionaries |
-| `json` | — | JSON string |
-| `pandas` | `pandas` | pandas DataFrame |
-| `polars` | `polars` | polars DataFrame |
-| `list` | — | List of record dicts |
+| Format   | Extra required | Description                |
+| -------- | -------------- | -------------------------- |
+| `dict`   | —              | Nested Python dictionaries |
+| `json`   | —              | JSON string                |
+| `pandas` | `pandas`       | pandas DataFrame           |
+| `polars` | `polars`       | polars DataFrame           |
+| `list`   | —              | List of record dicts       |
 
 ## Basic usage
 
@@ -21,12 +40,12 @@ session = Session(profile="local")
 
 with session:
     session.compute.apply("frob_norm", "stable_rank")
-    
+
     # Dictionary (nested by parameter uid)
     results = session.results.export_metrics(
         "frob_norm", "stable_rank", export_format="dict"
     )
-    
+
     # JSON string
     json_str = session.results.export_metrics(
         "frob_norm", "stable_rank", export_format="json"
@@ -48,8 +67,7 @@ Export to a DataFrame:
 ```python
 with session:
     df = session.results.export_metrics(
-        "frob_norm", "stable_rank", "effective_rank",
-        export_format="pandas"
+        "frob_norm", "stable_rank", "effective_rank", export_format="pandas"
     )
     print(df.head().to_string())
 ```
@@ -80,7 +98,7 @@ with session:
         "frob_norm",
         export_format="pandas",
     )
-    
+
     # Only attention layers (using regex)
     df = session.filter(param_names=["re:.*attn.*"]).results.export_metrics(
         "frob_norm",
@@ -111,15 +129,19 @@ with session:
 - `erase(*fields, erase_dependent_also=False, erase_all=False)` — remove
   computed field data while keeping the parameters. Field names are resolved
   through the kernel registry, so `erase()` applies to kernel-produced fields.
+  Erase a multi-output kernel's fields as a group, and stale dependents
+  explicitly (`erase_dependent_also=True`) — see
+  [Configuring kernels](kernels_and_compute.md#configuring-kernels) for why
+  `apply` cannot restore a partially erased produce group.
 
 ```python
 with session:
     df = session.results.export_metrics("frob_norm", export_format="pandas")
     uid = df["parameter_uid"].iloc[0]
-    
+
     # Attach an externally computed value to a parameter
     session.results.ingest_metrics({uid: {"external_score": 0.87}})
-    
+
     # Drop a computed field (parameters stay)
     session.results.erase("frob_norm")
 ```
@@ -129,10 +151,10 @@ with session:
 ```python
 with session:
     df = session.results.export_metrics("frob_norm", export_format="pandas")
-    
+
     # CSV
     df.to_csv("results.csv", index=False)
-    
+
     # Parquet (efficient for large datasets)
     df.to_parquet("results.parquet")
 ```

@@ -160,6 +160,23 @@ class TestSessionFieldCacheIncrementalUpdate:
 
         assert not cache.is_valid
 
+    def test_remove_fields_by_uids_skips_unknown_uids(self) -> None:
+        """Removing fields for a uid absent from the cache is a no-op, not a crash.
+
+        A scoped read can leave the shared cache holding only a subset of uids;
+        a subsequent whole-session erase then passes every uid, including ones
+        the cache never held. Those must be skipped, exactly as
+        add_computed_fields and remove_uids skip unknown uids.
+        """
+        cache = SessionFieldCache()
+        cache.set({"uid1": ["field1", "field2"]})
+
+        cache.remove_fields_by_uids(["uid1", "unknown_uid"], ["field1"])
+
+        result = cache.get()
+        assert result["uid1"] == ["field2"]
+        assert "unknown_uid" not in result
+
 
 class TestSessionFieldCacheEdgeCases:
     """Edge case tests for SessionFieldCache."""

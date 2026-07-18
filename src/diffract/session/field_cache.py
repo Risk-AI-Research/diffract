@@ -136,7 +136,8 @@ class SessionFieldCache:
         Instead of full invalidation, this method removes specified fields
         from specified cache entries. This is an optimization for results.erase().
 
-        If cache is not populated, this is a no-op.
+        If cache is not populated, this is a no-op; UIDs absent from the cache
+        are skipped, matching add_computed_fields and remove_uids.
 
         Args:
             uids: UIDs of cache entries to remove fields from.
@@ -150,11 +151,14 @@ class SessionFieldCache:
         updated_count = 0
 
         for uid in uids:
-            original_len = len(self._fields_by_uid[uid])
-            self._fields_by_uid[uid] = [
-                f for f in self._fields_by_uid[uid] if f not in fields_set
-            ]
-            if len(self._fields_by_uid[uid]) != original_len:
+            if uid not in self._fields_by_uid:
+                # A scoped read may have populated the cache with only a
+                # subset of uids; an absent uid has nothing to update.
+                continue
+            cached = self._fields_by_uid[uid]
+            remaining = [f for f in cached if f not in fields_set]
+            if len(remaining) != len(cached):
+                self._fields_by_uid[uid] = remaining
                 updated_count += 1
 
         logger.debug(

@@ -16,10 +16,12 @@ from typing import Self
 from dependency_injector.wiring import Provide, inject
 
 from diffract.containers import MainContainer, create_main_container
+from diffract.core.data.metadata.migrations import SchemaVersionError
 from diffract.core.data.nn.aggregates.repository import AggregateRepository
 from diffract.core.data.nn.aggregates.view import AggregateView
 from diffract.core.data.nn.params.interface import IParameterRepository, IParameterView
 from diffract.core.data.nn.params.schema import ParameterType
+from diffract.session.errors import IncompatibleStoreError
 from diffract.session.field_cache import SessionFieldCache
 from diffract.session.utils import filter_aggregate_view, filter_parameter_view
 
@@ -99,11 +101,27 @@ class Session:
             self.utils.merge_other_session(other_session, verify=False)
 
     def __enter__(self) -> Self | nullcontext[Self]:
-        """Enter session context and initialize resources."""
+        """Enter session context and initialize resources.
+
+        Raises:
+            IncompatibleStoreError: If a persistent store's metadata index is
+                at a different schema version; resources initialized before
+                the failure are released first.
+        """
         self.__context_depth += 1
         if self.__context_depth == 1:
             logger.debug("Init resources called")
-            self.__container.init_resources()
+            try:
+                self.__container.init_resources()
+            except BaseException as exc:
+                # A resource init failure (e.g. an incompatible store version)
+                # leaves earlier resources open; release them and undo the
+                # depth bump so the failure is clean and retryable.
+                self.__container.shutdown_resources()
+                self.__context_depth -= 1
+                if isinstance(exc, SchemaVersionError):
+                    raise IncompatibleStoreError(str(exc)) from exc
+                raise
             return self
         return nullcontext()
 

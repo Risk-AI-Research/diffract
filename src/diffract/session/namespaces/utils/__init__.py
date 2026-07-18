@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from dependency_injector.wiring import Provide, inject
 
+from diffract.session._identifiers import check_identifier
 from diffract.session.namespaces.utils.merger import (
     AggregateMerger,
     MergeTargetState,
@@ -17,7 +18,11 @@ from diffract.session.session import Session, SessionContext
 
 if TYPE_CHECKING:
     from diffract.core.data.nn.aggregates.repository import AggregateRepository
-    from diffract.core.data.nn.params.interface import IParameterRepository
+    from diffract.core.data.nn.aggregates.view import AggregateView
+    from diffract.core.data.nn.params.interface import (
+        IParameterRepository,
+        IParameterView,
+    )
     from diffract.core.parallel import ParallelContext
 
 logger = logging.getLogger(__name__)
@@ -90,6 +95,8 @@ class UtilsNamespace:
             source_params = source_context._param_filter_context
             source_aggs = source_context._agg_filter_context
 
+            self._validate_source_identifiers(source_params, source_aggs)
+
             # Merge parameters if any exist
             if source_params:
                 logger.info(
@@ -139,3 +146,25 @@ class UtilsNamespace:
 
             # Invalidate field cache since parameters/fields may have been added
             self.__session_or_context._field_cache.invalidate()
+
+    @staticmethod
+    def _validate_source_identifiers(
+        source_params: IParameterView,
+        source_aggs: AggregateView,
+    ) -> None:
+        """Reject any exotic identity string the source carries before merging.
+
+        Raises:
+            InvalidIdentifierError: On the first unaccepted stored identifier.
+        """
+        for param in source_params:
+            check_identifier(param.meta.model_id, kind="model id")
+            check_identifier(param.meta.name, kind="parameter name")
+
+        for aggregate in source_aggs:
+            meta = aggregate.meta
+            check_identifier(meta.field_name, kind="aggregate field name")
+            for model_id in meta.context_models:
+                check_identifier(model_id, kind="model id")
+            for param_name in meta.context_params:
+                check_identifier(param_name, kind="parameter name")

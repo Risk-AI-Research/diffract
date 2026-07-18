@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from diffract.session.namespaces.viz._utils import _to_field_ref
+from diffract.session.namespaces.viz._utils import _to_field_ref, _to_style_source
 from diffract.viz.data import FieldRef
+from diffract.viz.styling.sources import StyleLiteralKind
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -179,13 +180,6 @@ def sparkline(
         >>> session.viz.line(y="stable_rank", x="in_model_idx", group_by="model_id")
     """
     from diffract.viz.plots.sparkline import SparklinePlot
-    from diffract.viz.styling import LINE_DASHES
-
-    line_dash_value: str | FieldRef | None
-    if isinstance(line_dash, str) and line_dash not in LINE_DASHES:
-        line_dash_value = _to_field_ref(line_dash)
-    else:
-        line_dash_value = line_dash
 
     plot = SparklinePlot(
         y=_to_field_ref(y),
@@ -243,10 +237,8 @@ def sparkline(
         if isinstance(line_width, str)
         else line_width,
         line_width_range=line_width_range,
-        line_color=_to_field_ref(line_color)
-        if isinstance(line_color, str)
-        else line_color,
-        line_dash=line_dash_value,
+        line_color=_to_style_source(line_color, StyleLiteralKind.COLOR),
+        line_dash=_to_style_source(line_dash, StyleLiteralKind.DASH),
         line_shape=line_shape,
         line_smoothing=line_smoothing,
         marker_coloraxis_id=marker_coloraxis_id,
@@ -264,7 +256,7 @@ def sparkline(
         if isinstance(marker_opacity, str)
         else marker_opacity,
         marker_opacity_range=marker_opacity_range,
-        marker_color=marker_color,
-        marker_symbol=marker_symbol,
+        marker_color=_to_style_source(marker_color, StyleLiteralKind.COLOR),
+        marker_symbol=_to_style_source(marker_symbol, StyleLiteralKind.SYMBOL),
     )
     return self.draw(plot=plot, theme=theme, theme_path=theme_path)

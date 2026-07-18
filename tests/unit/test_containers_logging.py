@@ -66,3 +66,36 @@ def test_hybrid_profile_logs_under_diffract_dir(
 
     assert not (tmp_path / "diffract.log").exists()
     assert "Failed to configure logging" not in caplog.text
+
+
+def test_user_logging_survives_session_resource_cycles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    container = create_main_container(profile="ram")
+
+    root = logging.getLogger()
+    diffract_logger = logging.getLogger("diffract")
+    root_handler = logging.NullHandler()
+    diffract_handler = logging.NullHandler()
+    original_root_level = root.level
+
+    root.addHandler(root_handler)
+    diffract_logger.addHandler(diffract_handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        # A namespace call enters and exits the container context, i.e. one
+        # init_resources()/shutdown_resources() pair.
+        for _ in range(3):
+            container.init_resources()
+            container.shutdown_resources()
+
+        assert root_handler in root.handlers
+        assert diffract_handler in diffract_logger.handlers
+        assert root.level == logging.DEBUG
+    finally:
+        root.removeHandler(root_handler)
+        diffract_logger.removeHandler(diffract_handler)
+        root.setLevel(original_root_level)

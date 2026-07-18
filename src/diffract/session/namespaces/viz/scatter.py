@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from diffract.session.namespaces.viz._utils import _to_field_ref
+from diffract.session.namespaces.viz._utils import _to_field_ref, _to_style_source
 from diffract.viz.data import FieldRef
+from diffract.viz.styling.sources import StyleLiteralKind
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -196,7 +197,7 @@ def scatter(
         if isinstance(marker_opacity, str)
         else marker_opacity,
         marker_opacity_range=marker_opacity_range,
-        marker_color=marker_color,
-        marker_symbol=marker_symbol,
+        marker_color=_to_style_source(marker_color, StyleLiteralKind.COLOR),
+        marker_symbol=_to_style_source(marker_symbol, StyleLiteralKind.SYMBOL),
     )
     return self.draw(plot=plot, theme=theme, theme_path=theme_path)
