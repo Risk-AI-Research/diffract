@@ -8,22 +8,59 @@ from diffract.core.compute.execution.enums import (
     KernelApplyLevel,
     KernelRestrictions,
 )
+from diffract.core.compute.extensions.spectral import relative_norm_change
 from diffract.core.compute.metadata import KernelInfo
+
+
+@kernel(
+    name="relative_weight_change",
+    require_fields=("weights",),
+    symmetric=False,
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+    restrictions=KernelRestrictions.BINARY
+    | KernelRestrictions.MATCH_ROWS
+    | KernelRestrictions.MATCH_COLUMNS,
+    info=KernelInfo(formula=r"\lVert W_t-W_s\rVert_F/\lVert W_s\rVert_F"),
+)
+@kernel(
+    name="relative_spectrum_change",
+    require_fields=("weights_svals",),
+    symmetric=False,
+    apply_level=KernelApplyLevel.CROSS_MODEL,
+    restrictions=KernelRestrictions.BINARY | KernelRestrictions.MATCH_LOWER_DIM,
+    info=KernelInfo(
+        formula=(
+            r"\lVert \boldsymbol{\sigma}_t-\boldsymbol{\sigma}_s\rVert_2"
+            r"/\lVert \boldsymbol{\sigma}_s\rVert_2"
+        )
+    ),
+)
+def relative_change(
+    values: tuple[NDArray[np.floating[Any]], NDArray[np.floating[Any]]],
+) -> float:
+    """Measure the Euclidean change relative to a nonzero source."""
+    return relative_norm_change(*values)
 
 
 @kernel(
     name="l_overlap",
     require_fields=("weights_lsvs", "lower_dim"),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
-    restrictions=KernelRestrictions.BINARY,
-    info=KernelInfo(formula=r"O^{L} = \lvert U_1^\top U_2\rvert"),
+    restrictions=KernelRestrictions.BINARY
+    | KernelRestrictions.MATCH_ROWS
+    | KernelRestrictions.MATCH_LOWER_DIM,
+    info=KernelInfo(formula=r"O^{L} = \lvert U_s^\top U_t\rvert"),
 )
 @kernel(
     name="r_overlap",
     require_fields=("weights_rsvs", "lower_dim"),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
-    restrictions=KernelRestrictions.BINARY,
-    info=KernelInfo(formula=r"O^{R} = \lvert V_1^\top V_2\rvert"),
+    restrictions=KernelRestrictions.BINARY
+    | KernelRestrictions.MATCH_COLUMNS
+    | KernelRestrictions.MATCH_LOWER_DIM,
+    info=KernelInfo(formula=r"O^{R} = \lvert V_s^\top V_t\rvert"),
 )
 def overlap(
     weights_svs: tuple[NDArray[np.floating[Any]], NDArray[np.floating[Any]]],
@@ -31,8 +68,9 @@ def overlap(
 ) -> NDArray[np.floating[Any]]:
     r"""Absolute overlap of two singular-vector bases.
 
-    :math:`\lvert S_1^\top S_2\rvert` -- the SVD sign gauge is arbitrary, so only
-    the absolute overlap is an invariant of the checkpoint pair.
+    :math:`\lvert B_s^\top B_t\rvert` for the left or right bases at source and target.
+    Entrywise magnitudes are invariant to sign flips. Rotations within a tied
+    singular subspace can change individual entries.
     """
     svs, svs_other = weights_svs
 
@@ -49,12 +87,14 @@ def overlap(
 @kernel(
     name="l_agreement",
     require_fields=("l_overlap",),
+    symmetric=True,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"(O^{L})_{ii}"),
 )
 @kernel(
     name="r_agreement",
     require_fields=("r_overlap",),
+    symmetric=True,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"(O^{R})_{ii}"),
 )
@@ -67,12 +107,14 @@ def vector_agreement(overlap: NDArray[np.floating[Any]]) -> NDArray[np.floating[
 @kernel(
     name="max_l_agreement",
     require_fields=("l_overlap",),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\max_j (O^{L})_{ij}"),
 )
 @kernel(
     name="max_r_agreement",
     require_fields=("r_overlap",),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\max_j (O^{R})_{ij}"),
 )
@@ -87,24 +129,28 @@ def max_vector_agreement(
 @kernel(
     name="avg_l_agreement",
     require_fields=("l_agreement",),
+    symmetric=True,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\big\langle (O^{L})_{ii}\big\rangle"),
 )
 @kernel(
     name="avg_r_agreement",
     require_fields=("r_agreement",),
+    symmetric=True,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\big\langle (O^{R})_{ii}\big\rangle"),
 )
 @kernel(
     name="avg_max_l_agreement",
     require_fields=("max_l_agreement",),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\big\langle \max_j (O^{L})_{ij}\big\rangle"),
 )
 @kernel(
     name="avg_max_r_agreement",
     require_fields=("max_r_agreement",),
+    symmetric=False,
     apply_level=KernelApplyLevel.CROSS_MODEL,
     info=KernelInfo(formula=r"\big\langle \max_j (O^{R})_{ij}\big\rangle"),
 )

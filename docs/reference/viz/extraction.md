@@ -8,7 +8,7 @@ All three functions are re-exported from `diffract.viz.data`.
 
 ## Entries and contexts
 
-An `Entry` is a `TypedDict` with a single `fields` mapping. Plots fetch entries
+An `Entry` is a `TypedDict` with a `fields` mapping and optional `field_contexts` for aggregates. Plots fetch entries
 via `DataProvider` as a `dict[str, Entry]` keyed by uid. To resolve a single
 field you first build an `EntryContext`, which extracts the model and parameter
 context from an entry's fields:
@@ -16,10 +16,17 @@ context from an entry's fields:
 ```python
 from diffract.viz.data import Entry, EntryContext
 
-entry: Entry = {"fields": {"model_id": "gpt2", "name": "layer.0.weight", "stable_rank": 5.0}}
+entry: Entry = {
+    "fields": {"model_id": "gpt2", "name": "layer.0.weight", "stable_rank": 5.0}
+}
 ctx = EntryContext.from_entry(entry)
 # ctx.fields, ctx.model_id == "gpt2", ctx.parameter_name == "layer.0.weight"
 ```
+
+Plot selectors accept `name`, `parameter_name` (metric tables), and
+`param_name` (long comparison rows) for the parameter name. For example,
+`session.viz.scatter(x="step", y="stable_rank", group_by="parameter_name")`
+draws one series per parameter name.
 
 ## get_field_value
 
@@ -34,41 +41,22 @@ get_field_value(ctx, "stable_rank")  # 5.0
 
 ### Contextual fields
 
-Fields produced by aggregated kernels carry contextual suffixes, for example:
-
-```
-agreement@models[m1,m2]@params[layer.0.weight,layer.1.weight]
-```
-
-`get_field_value` matches a base name to its contextual variants:
+Use the same selectors for plots and result exports. For example, this
+reference selects the overlap from the initial checkpoint of model `a` to
+step 10 of model `b`:
 
 ```python
-entry = {
-    "fields": {
-        "model_id": "m1",
-        "name": "p1",
-        "agreement@models[m2]": 0.4,
-        "agreement@models[m1]@params[p1]": 0.87,
-    }
-}
-ctx = EntryContext.from_entry(entry)
+from diffract import FieldSelector
+from diffract.viz.data import FieldRef
 
-get_field_value(ctx, "agreement")  # 0.87 (best match for m1 / p1)
+ref = FieldRef(FieldSelector("l_overlap", roles=("a", "b"), steps=(0, 10)))
 ```
 
-Resolution priority:
-
-1. Direct field (if present).
-2. Contextual field matching the entry's model.
-3. Contextual field matching the entry's parameter.
-4. Smaller context size (fewer models/params listed, i.e. more specific).
-5. Field name order (deterministic tiebreak).
-
-A candidate whose context omits the models (or params) component counts as
-matching that dimension: `agreement@params[p1]` matches any model, and
-`agreement@models[m1]` matches any parameter.
-
-Raises `ValueError` if no matching field is found.
+The provider attaches the aggregate context to each participating parameter.
+A plot slot that matches both directions raises `ValueError` and lists the
+role-qualified selectors. A value filter keeps an entry if any matching
+direction satisfies its predicate. For other contextual fields, the extractor
+prefers the matching model and parameter, then the smallest context.
 
 ## get_field_values
 
@@ -107,8 +95,8 @@ its values (also re-exported from `diffract.viz.data`):
 ```python
 from diffract.viz.data import detect_data_type, detect_data_shape, detect_field_meta
 
-detect_data_type([1, 2, 3])          # DataType.NUMERIC
-detect_data_type(["a", "b"])         # DataType.CATEGORICAL
+detect_data_type([1, 2, 3])  # DataType.NUMERIC
+detect_data_type(["a", "b"])  # DataType.CATEGORICAL
 detect_data_shape([[1, 2], [3, 4]])  # DataShape.VECTOR
 
 meta = detect_field_meta([1.0, 2.0])
@@ -117,11 +105,11 @@ meta = detect_field_meta([1.0, 2.0])
 
 ## API summary
 
-| Function | Description |
-|----------|-------------|
-| `get_field_value(ctx, field)` | Resolve a field from an `EntryContext`, with contextual matching |
-| `get_field_values(entries, field)` | Resolve a field for every entry |
-| `get_field_data(entries, field)` | Values plus detected `DataType` and `DataShape` |
-| `detect_data_type(values)` | Infer `DataType` (numeric vs categorical) |
-| `detect_data_shape(values)` | Infer `DataShape` (scalar vs vector) |
-| `detect_field_meta(values)` | Infer both as a `FieldMeta` |
+| Function                           | Description                                                      |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `get_field_value(ctx, field)`      | Resolve a field from an `EntryContext`, with contextual matching |
+| `get_field_values(entries, field)` | Resolve a field for every entry                                  |
+| `get_field_data(entries, field)`   | Values plus detected `DataType` and `DataShape`                  |
+| `detect_data_type(values)`         | Infer `DataType` (numeric vs categorical)                        |
+| `detect_data_shape(values)`        | Infer `DataShape` (scalar vs vector)                             |
+| `detect_field_meta(values)`        | Infer both as a `FieldMeta`                                      |

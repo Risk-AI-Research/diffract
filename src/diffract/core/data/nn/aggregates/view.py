@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from diffract.core.constants import REGEX_PREFIX, TABLE_AGGREGATES
 from diffract.core.data.interface import EntityUID
@@ -29,6 +29,8 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
     Uses SQL-based filtering via MetadataIndex for efficiency.
     """
 
+    _repository: AggregateRepository
+
     def __init__(
         self,
         *,
@@ -41,17 +43,36 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
         """Iterate aggregate proxies in view order."""
         return super().__iter__()
 
+    def read_catalog_values(self) -> dict[str, tuple[Any, str | None]] | None:
+        """Read each value and its run ID from the same catalog pointer."""
+        storage = self._repository.storage_manager
+        if getattr(storage, "uses_value_revisions", False) is not True:
+            return None
+        pointers = storage.live_pointers(
+            self.list_uids(),
+            ("value",),
+            table=TABLE_AGGREGATES,
+            include_generation=True,
+        )
+        return {
+            uid: (
+                self._repository.get_proxy(uid).read_resolved_field(
+                    field, pointer, auto_prefetch=True, best_effort=True
+                ),
+                pointer.generation.run_id if pointer.generation else None,
+            )
+            for (uid, field), pointer in pointers.items()
+        }
+
     def _sort_in_place(self) -> None:
         """Sort UIDs by field_name, context for deterministic ordering."""
         uids = self._ensure_uids()
-        uids.sort(
-            key=lambda uid: (
-                self._repository.get_proxy(uid).meta.field_name,
-                ",".join(sorted(self._repository.get_proxy(uid).meta.context_models)),
-                ",".join(sorted(self._repository.get_proxy(uid).meta.context_params)),
-                uid,
-            )
-        )
+
+        def order(uid: str) -> tuple[str, tuple[str, ...], tuple[str, ...], str]:
+            meta = self._repository.get_proxy(uid).meta
+            return meta.field_name, meta.context_models, meta.context_params, uid
+
+        uids.sort(key=order)
         self._sorted = True
 
     def filter_by_field_name(
@@ -113,6 +134,26 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
             ]
 
         return AggregateView(repository=self._repository, uids=filtered)
+
+    def within_parameters(self, parameter_uids: list[str]) -> AggregateView:
+        """Keep aggregates whose complete, nonempty membership is in the scope."""
+        candidates = self._repository.referencing(parameter_uids)
+        if self._uids is not None:
+            allowed = set(self._uids)
+            candidates = [uid for uid in candidates if uid in allowed]
+        rows = self._repository.metadata_index.query_rows(
+            self._repository.MEMBERS,
+            columns=("aggregate_uid", "member_uid"),
+            where_in={"aggregate_uid": candidates},
+        )
+        scope = set(parameter_uids)
+        outside = {
+            row["aggregate_uid"] for row in rows if row["member_uid"] not in scope
+        }
+        return AggregateView(
+            repository=self._repository,
+            uids=[uid for uid in candidates if uid not in outside],
+        )
 
     def filter_by_context_models(
         self, *model_ids: str, require_all: bool = False
@@ -288,17 +329,13 @@ class AggregateView(DataView[AggregateMetadata, AggregateProxy]):
         """
         uids = self._ensure_uids()
 
-        if erase and self._repository.cache_manager is not None:
-            self._repository.cache_manager.clear()
-
         with self._repository:
-            for uid in list(uids):
-                self._repository._proxy_cache.pop(uid, None)
-                self._repository.metadata_index.delete(TABLE_AGGREGATES, uid)
-                if erase:
-                    self._repository.storage_manager.erase_obj(
-                        uid, table=TABLE_AGGREGATES
-                    )
+            if erase:
+                self._repository.erase_values(uids)
+            self._repository.metadata_index.delete_rows(
+                self._repository.MEMBERS, where_in={"aggregate_uid": uids}
+            )
+            self._repository.remove_membership(uids)
 
         if self._uids is not None:
             self._uids.clear()

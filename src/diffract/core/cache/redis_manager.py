@@ -95,6 +95,8 @@ else:
             _redis: Redis client instance.
         """
 
+        supports_revisions = True
+
         def __init__(
             self,
             host: str = "localhost",
@@ -199,18 +201,27 @@ else:
             """
             return f"{self._key_prefix}{obj_uid}:{field_name}".encode()
 
-        def has_field(self, obj_uid: UID, field_name: str) -> bool:
+        def has_field(
+            self, obj_uid: UID, field_name: str, *, revision: str | None = None
+        ) -> bool:
             """Check if an object has a specific field in cache.
 
             Args:
                 obj_uid: Unique identifier for the cached object.
                 field_name: Name of the field to check.
+                revision: Catalog revision associated with this value, when supplied.
 
             Returns:
                 True if the field exists, False otherwise or on error.
             """
             try:
-                return bool(self._redis.exists(self._make_key(obj_uid, field_name)))
+                key = self._make_key(obj_uid, field_name)
+                if revision is not None:
+                    return (
+                        self._redis.getrange(key, 1, len(revision) + 1)
+                        == (revision + "/").encode()
+                    )
+                return bool(self._redis.exists(key))
             except RedisError as e:
                 logger.debug(
                     "Redis has_field error for %s/%s: %s",
@@ -221,12 +232,21 @@ else:
                 )
                 return False
 
-        def get_field(self, obj_uid: UID, field_name: str) -> Any:
+        def get_field(
+            self,
+            obj_uid: UID,
+            field_name: str,
+            *,
+            revision: str | None = None,
+            default: Any = None,
+        ) -> Any:
             """Retrieve a field value from cache.
 
             Args:
                 obj_uid: Unique identifier for the cached object.
                 field_name: Name of the field to retrieve.
+                revision: Catalog revision associated with this value, when supplied.
+                default: Value returned on a cache miss.
 
             Returns:
                 The cached value or None if field doesn't exist or on error.
@@ -235,14 +255,16 @@ else:
                 key = self._make_key(obj_uid, field_name)
                 data = self._redis.get(key)
                 if data is None:
-                    return None
+                    return default
                 try:
                     payload, tag = _unframe(data)
-                    return decode_value(payload, tag)
+                    if revision is not None and not tag.startswith(revision + "/"):
+                        return default
+                    return decode_value(payload, tag.rsplit("/", 1)[-1])
                 except _DECODE_MISS_ERRORS:
                     with contextlib.suppress(RedisError):
                         self._redis.delete(key)
-                    return None
+                    return default
             except RedisError as e:
                 logger.debug(
                     "Redis get_field error for %s/%s: %s",
@@ -251,7 +273,7 @@ else:
                     format_exception_message(e),
                     exc_info=True,
                 )
-                return None
+                return default
 
         def list_objs_has_field(self, field_name: str) -> list[UID]:
             """List all object UIDs that have a specific field.
@@ -297,12 +319,20 @@ else:
             else:
                 return uids
 
-        def set_field(self, obj_uid: UID, field_name: str, value: Any) -> None:
+        def set_field(
+            self,
+            obj_uid: UID,
+            field_name: str,
+            value: Any,
+            *,
+            revision: str | None = None,
+        ) -> None:
             """Store a field value in cache.
 
             Args:
                 obj_uid: Unique identifier for the cached object.
                 field_name: Name of the field to store.
+                revision: Catalog revision associated with this value, when supplied.
                 value: Value to cache. Supported kinds are NumPy arrays,
                     ``bytes``, and JSON-serializable values.
 
@@ -310,7 +340,10 @@ else:
                 ValueError: If the value is not a supported kind.
                 RedisError: If storage operation fails.
             """
-            blob = _frame(*encode_value(value))
+            payload, tag = encode_value(value)
+            blob = _frame(
+                payload, revision + "/" + tag if revision is not None else tag
+            )
             try:
                 key = self._make_key(obj_uid, field_name)
 

@@ -75,6 +75,9 @@ def test_polars_formatter_empty_results_schema() -> None:
         "parameter_name",
         "parameter_uid",
         "parameter_type",
+        "instance_uid",
+        "step",
+        "step_label",
         "mean",
     }
 

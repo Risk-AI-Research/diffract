@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -47,6 +46,8 @@ class ResultsEraser:
         self,
         fields_to_erase: Iterable[str],
         erase_dependent_also: bool,
+        *,
+        stored_fields: Iterable[str] = (),
     ) -> set[str]:
         """Resolve kernel dependencies to get full set of fields to erase.
 
@@ -54,19 +55,22 @@ class ResultsEraser:
             fields_to_erase: Initial fields to erase.
             erase_dependent_also: If True, include fields that depend
                 on the specified fields.
+            stored_fields: Names known from the value catalog.
 
         Returns:
             Complete set of fields to erase.
 
         Raises:
-            ResultsEraserError: If a field cannot be produced by any kernel.
+            ResultsEraserError: If a field is neither stored nor producible.
         """
         result: list[str] = []
+        stored = set(stored_fields)
 
         for field_name in fields_to_erase:
-            if not self._registry.can_produce_field(field_name):
-                msg = f"Registry cannot produce '{field_name}'"
-                raise ResultsEraserError(msg)
+            if field_name not in stored and not self._registry.can_produce_field(
+                field_name
+            ):
+                raise ResultsEraserError(field_name)
 
             result.append(field_name)
 
@@ -79,7 +83,11 @@ class ResultsEraser:
         """Find all fields that depend on the given field."""
         dependent_fields: list[str] = []
 
-        producer = self._registry.get_kernel_producing_field(field_name)
+        producer = (
+            self._registry.get_kernel_producing_field(field_name)
+            if self._registry.can_produce_field(field_name)
+            else None
+        )
         all_kernels = self._registry.list_kernels()
 
         for other_kernel in all_kernels:
@@ -107,7 +115,7 @@ class ResultsEraser:
         parameters: IParameterView,
         aggregates: AggregateView | None = None,
         fields: set[str],
-    ) -> None:
+    ) -> int:
         """Erase fields from parameters and aggregates.
 
         Args:
@@ -117,9 +125,9 @@ class ResultsEraser:
         """
         logger.debug("Erasing fields: %s", ", ".join(sorted(fields)))
 
-        # Erase scalar fields from parameters
-        re_patterns = [rf"{re.escape(f)}" for f in fields]
-        parameters.erase_fields_with_regexp(*re_patterns)
+        if not fields:
+            return 0
+        affected = parameters.erase_exact_fields(*sorted(fields))
 
         # Erase aggregate entries by field_name
         if aggregates is not None:
@@ -127,3 +135,4 @@ class ResultsEraser:
             if aggregates_to_erase:
                 logger.debug("Erasing %d aggregate entries", len(aggregates_to_erase))
                 aggregates_to_erase.clear(erase=True)
+        return affected

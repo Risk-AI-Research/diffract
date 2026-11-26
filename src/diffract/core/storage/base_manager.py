@@ -77,7 +77,7 @@ class BaseStorageManager(IStorageManager):
         return self._get_field_metadata(obj_uid, field_name, table=table)
 
     def list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]:
         """List fields.
 
@@ -266,7 +266,7 @@ class BaseStorageManager(IStorageManager):
 
     @abstractmethod
     def _list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]: ...
 
     @abstractmethod

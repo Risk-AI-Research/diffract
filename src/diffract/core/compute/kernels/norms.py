@@ -3,6 +3,7 @@ from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import norm
 
 from diffract.core.compute.decorator import kernel
 from diffract.core.compute.execution.enums import KernelApplyLevel
@@ -82,10 +83,14 @@ def model_alpha_norm(alpha_norm: tuple[float, ...]) -> float:
     return _reduce_measurable(_log10_or_nan(alpha_norm, square=False), reduce="mean")
 
 
-@kernel
+@kernel(version="2")
 def frob_norm(weights_svals: NDArray[np.floating[Any]]) -> float:
     r"""Frobenius norm :math:`\lVert W\rVert_F = \sqrt{\sum_i \sigma_i^2}`."""
-    return math.sqrt(cast("float", np.sum(weights_svals**2).item()))
+    if np.isnan(weights_svals).any():
+        return math.nan
+    return float(
+        norm(np.asarray(weights_svals, dtype=np.float64).ravel(), check_finite=False)
+    )
 
 
 @kernel

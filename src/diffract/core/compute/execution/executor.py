@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from diffract.core.data.nn.params.interface import IParameterView
     from diffract.core.parallel import ParallelContext
 
+    from .aggregation import CoordinatePairs
+    from .traces import FieldStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,11 +89,17 @@ class KernelExecutor:
         self.clear_execution_state()
 
     def clear_execution_state(self) -> None:
-        """Reset executed kernels set, allowing re-execution."""
+        """Release the grouping snapshot and reset the executed kernels."""
         self._executed.clear()
+        self._aggregation_runner.clear_execution_state()
 
     def execute(
-        self, field_or_kernel_name: str, parameters: IParameterView
+        self,
+        field_or_kernel_name: str,
+        parameters: IParameterView,
+        *,
+        forced_kernels: frozenset[str] = frozenset(),
+        pairs: CoordinatePairs | None = None,
     ) -> set[str]:
         """Execute a kernel or produce a field with dependency resolution.
 
@@ -100,6 +109,8 @@ class KernelExecutor:
         Args:
             field_or_kernel_name: Kernel name or field name to execute/produce.
             parameters: Parameter collection to process.
+            forced_kernels: Kernels to execute even when their outputs are fresh.
+            pairs: Ordered cross-model coordinates selected by the caller.
 
         Returns:
             The set of field names actually written across the resolved
@@ -113,22 +124,46 @@ class KernelExecutor:
         written: set[str] = set()
         for dep in dependencies:
             if dep != field_or_kernel_name and dep not in self._executed:
-                written |= self.execute(dep, parameters)
+                written |= self.execute(
+                    dep, parameters, forced_kernels=forced_kernels, pairs=pairs
+                )
 
         if self._registry.has_kernel(field_or_kernel_name):
-            written |= self._dispatch_kernel(field_or_kernel_name, parameters)
+            written |= self._dispatch_kernel(
+                field_or_kernel_name,
+                parameters,
+                force=field_or_kernel_name in forced_kernels,
+                pairs=pairs,
+            )
             self._executed.add(field_or_kernel_name)
         return written
 
     def _dispatch_kernel(
-        self, kernel_name: str, parameters: IParameterView
+        self,
+        kernel_name: str,
+        parameters: IParameterView,
+        *,
+        force: bool,
+        pairs: CoordinatePairs | None,
     ) -> set[str]:
         """Dispatch kernel execution to the appropriate runner."""
         apply_level = self._registry.get_kernel_apply_level(kernel_name)
 
         if apply_level == KernelApplyLevel.PARAMETER:
-            return self._parameter_runner.run(kernel_name, parameters)
+            return self._parameter_runner.run(kernel_name, parameters, force=force)
         if apply_level in (KernelApplyLevel.IN_MODEL, KernelApplyLevel.CROSS_MODEL):
-            return self._aggregation_runner.run(kernel_name, parameters)
+            return self._aggregation_runner.run(
+                kernel_name, parameters, force=force, pairs=pairs
+            )
         msg = f"Unknown kernel apply level: {apply_level}"
         raise RuntimeError(msg)
+
+    def inspect(
+        self, field: str, parameters: IParameterView
+    ) -> tuple[FieldStatus, ...]:
+        """Describe stored output freshness for one field without executing kernels."""
+        kernel = self._registry.get_kernel_producing_field(field)
+        level = self._registry.get_kernel_apply_level(kernel)
+        if level == KernelApplyLevel.PARAMETER:
+            return self._parameter_runner.inspect(kernel, field, parameters)
+        return self._aggregation_runner.inspect(kernel, field, parameters)

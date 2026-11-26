@@ -158,7 +158,10 @@ class HeatmapPlot(
             fig.update_layout(title=self.title)
         else:
             fig.update_layout(
-                title=f"{self.z.field} by {self.y.field} x {self.x.field}"
+                title=(
+                    f"{self._field_label(self.z)} by {self._field_label(self.y)}"
+                    f" x {self._field_label(self.x)}"
+                )
             )
 
         # Reverse y-axis so the first row is at the top (matrix convention)

@@ -22,21 +22,26 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 from .containers import list_profiles
 from .core.data.metadata import upgrade_metadata_index
 from .core.data.nn.params.schema import ParameterType
-from .session import ParameterOverrides, Session
+from .session import FieldSelector, ParameterOverrides, Session
+from .session.analysis import AnalysisResult, analyze, compare
 
 if TYPE_CHECKING:
     from . import viz as viz
 
 __all__ = [
+    "AnalysisResult",
+    "FieldSelector",
     "ParameterOverrides",
     "ParameterType",
     "Session",
     "__version__",
+    "analyze",
+    "compare",
     "list_profiles",
     "upgrade_metadata_index",
     "viz",

@@ -12,7 +12,6 @@ from diffract.core.data.identity import (
     validate_field_name,
     validate_identifier,
 )
-from diffract.core.data.nn.aggregates.metadata import AggregateMetadata
 from diffract.session.resolver import resolve
 
 pytestmark = pytest.mark.unit
@@ -63,15 +62,10 @@ def test_allowed_alphabet_excludes_the_grammar_separators() -> None:
 
 
 def test_rejected_identifier_would_have_broken_the_uid_grammar() -> None:
-    clean = AggregateMetadata.create_uid_from_context(
-        field_name="metric", context_models=("run_0",), context_params=()
-    )
-    selector = resolve(clean)
+    selector = resolve("metric@models[run_0]")
     assert (selector.field, selector.models) == ("metric", ("run_0",))
 
-    exotic = AggregateMetadata.create_uid_from_context(
-        field_name="metric", context_models=("run@0",), context_params=()
-    )
+    exotic = "metric@models[run@0]"
     assert resolve(exotic).models != ("run@0",)
 
 

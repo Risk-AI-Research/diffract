@@ -1,21 +1,12 @@
-import functools
+from functools import partial
 from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
-import diffract.core.utils.imports as import_utils
 from diffract.core.compute.decorator import kernel
+from diffract.core.compute.extensions.spectral import bind_svd
 from diffract.core.compute.metadata import KernelInfo
-
-torch = import_utils.optional_import("torch")
-TORCH_AVAILABLE = torch is not None
-if TORCH_AVAILABLE:
-    from diffract.core.compute.extensions.utils import torch_cuda_wrapper
-
-    IS_CUDA_AVAILABLE = bool(torch.cuda.is_available())
-else:
-    IS_CUDA_AVAILABLE = False
 
 
 @kernel(
@@ -26,45 +17,67 @@ else:
         "weights_svals",
         "weights_rsvs",
     ),
-)
-@kernel(
-    name="weights_rand_svd",
-    require_fields=("weights_rand",),
-    produce_fields=(
-        "weights_rand_lsvs",
-        "weights_rand_svals",
-        "weights_rand_rsvs",
-    ),
-    info=KernelInfo(formula=r"W_{\mathrm{rand}} = U\Sigma V^\top"),
+    bind_execution=partial(bind_svd, output="factors"),
+    version="2",
+    stream_inputs=True,
 )
 def svd(
-    mat: NDArray[np.floating[Any]], *, allow_cuda: bool = True
+    mat: NDArray[np.floating[Any]],
+    *,
+    allow_cuda: bool = True,
+    precision: str = "preserve",
 ) -> tuple[
     NDArray[np.floating[Any]], NDArray[np.floating[Any]], NDArray[np.floating[Any]]
 ]:
     r"""Economy SVD :math:`W = U\Sigma V^\top` with ascending :math:`\sigma_i`."""
-    if IS_CUDA_AVAILABLE and allow_cuda:
-        svd_fn = functools.partial(torch.linalg.svd, full_matrices=False)
-        u, svals, vt = torch_cuda_wrapper(mat, svd_fn)
-    else:
-        try:
-            u, svals, vt = np.linalg.svd(mat, full_matrices=False)
-        except np.linalg.LinAlgError:
-            # nan weights make gesdd fail to converge; mirror the inf path's
-            # all-nan spectrum so the nan contract holds downstream.
-            k = min(mat.shape)
-            u = np.full((mat.shape[0], k), np.nan)
-            svals = np.full(k, np.nan)
-            vt = np.full((k, mat.shape[1]), np.nan)
+    _, solve = bind_svd(
+        {"precision": precision, "allow_cuda": allow_cuda}, output="factors"
+    )
+    return solve(mat).value
 
-    svals = np.abs(svals.real).flatten()
-    svals_argsort_index = np.argsort(svals)
 
-    lsvs_sorted = u[:, svals_argsort_index]
-    svals_sorted = svals[svals_argsort_index]
-    rsvs_sorted = vt.T[:, svals_argsort_index]
+@kernel(
+    name="weights_rand_svd",
+    require_fields=("weights_rand",),
+    produce_fields=("weights_rand_svals",),
+    info=KernelInfo(formula=r"\boldsymbol{\sigma}(W^{\mathrm{rand}})"),
+    bind_execution=partial(bind_svd, output="values"),
+    version="3",
+    stream_inputs=True,
+)
+def rand_singular_values(
+    mat: NDArray[np.floating[Any]],
+    *,
+    allow_cuda: bool = True,
+    precision: str = "preserve",
+) -> NDArray[np.floating[Any]]:
+    """Compute the ascending singular values of the entry-permuted weight matrix."""
+    _, solve = bind_svd(
+        {"precision": precision, "allow_cuda": allow_cuda}, output="values"
+    )
+    return solve(mat).value
 
-    return lsvs_sorted, svals_sorted, rsvs_sorted
+
+@kernel(
+    name="weights_rand_vectors",
+    require_fields=("weights_rand",),
+    produce_fields=("weights_rand_lsvs", "weights_rand_rsvs"),
+    info=KernelInfo(formula=r"(U^{\mathrm{rand}}, V^{\mathrm{rand}})"),
+    bind_execution=partial(bind_svd, output="vectors"),
+    version="2",
+    stream_inputs=True,
+)
+def rand_singular_vectors(
+    mat: NDArray[np.floating[Any]],
+    *,
+    allow_cuda: bool = True,
+    precision: str = "preserve",
+) -> tuple[NDArray[np.floating[Any]], NDArray[np.floating[Any]]]:
+    """Return the left and right singular vectors of the entry-permuted matrix."""
+    _, solve = bind_svd(
+        {"precision": precision, "allow_cuda": allow_cuda}, output="vectors"
+    )
+    return solve(mat).value
 
 
 @kernel(name="esd", require_fields=("weights_svals", "greater_dim"))

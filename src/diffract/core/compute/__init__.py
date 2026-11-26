@@ -16,7 +16,7 @@ from diffract.core.compute.execution.enums import (
 )
 from diffract.core.compute.execution.executor import KernelExecutor
 
-from .config import KernelConfig
+from .config import KernelConfig, KernelResult, OutputComparison
 from .decorator import kernel, register_default_kernels
 from .exceptions import (
     CircularDependencyError,
@@ -41,6 +41,8 @@ __all__ = [
     "KernelExecutor",
     "KernelRegistry",
     "KernelRestrictions",
+    "KernelResult",
+    "OutputComparison",
     "kernel",
     "register_default_kernels",
 ]

@@ -1,70 +1,42 @@
-"""Unit tests for the aggregate-uid mint (AggregateMetadata.create_uid_from_context).
-
-The mint is the single writer-side composer of the legacy uid grammar. Its
-output is the storage identity of every stored aggregate, so the exact byte
-shape is pinned here: a drifting mint silently orphans every previously
-stored aggregate (dedup misses, "already computed" checks fail open).
-"""
+"""Golden identity bytes for set and ordered aggregate membership."""
 
 from __future__ import annotations
 
 import pytest
 
-from diffract.core.data.nn.aggregates.metadata import AggregateMetadata
+from diffract.core.data.nn.aggregates.identity import aggregate_identity
 
 pytestmark = pytest.mark.unit
 
 
-def test_uid_is_the_bare_field_name_without_context() -> None:
-    uid = AggregateMetadata.create_uid_from_context(
-        field_name="l_overlap", context_models=(), context_params=()
-    )
-    assert uid == "l_overlap"
-
-
-def test_uid_golden_shapes_match_v03_stored_identity() -> None:
-    assert (
-        AggregateMetadata.create_uid_from_context(
-            field_name="f", context_models=("m1",), context_params=()
-        )
-        == "f@models[m1]"
-    )
-    assert (
-        AggregateMetadata.create_uid_from_context(
-            field_name="f", context_models=(), context_params=("p1", "p2")
-        )
-        == "f@params[p1,p2]"
-    )
-    assert (
-        AggregateMetadata.create_uid_from_context(
-            field_name="agreement",
-            context_models=("m1", "m2"),
-            context_params=("w1", "w2"),
-        )
-        == "agreement@models[m1,m2]@params[w1,w2]"
-    )
-
-
-def test_uid_sorts_context_members() -> None:
-    forward = AggregateMetadata.create_uid_from_context(
-        field_name="k", context_models=("m1", "m2"), context_params=("p1", "p2")
-    )
-    reversed_ = AggregateMetadata.create_uid_from_context(
-        field_name="k", context_models=("m2", "m1"), context_params=("p2", "p1")
-    )
-    assert forward == reversed_ == "k@models[m1,m2]@params[p1,p2]"
-
-
-def test_uid_discriminates_field_models_and_params() -> None:
-    base = AggregateMetadata.create_uid_from_context(
-        field_name="k", context_models=("m1",), context_params=("p1",)
-    )
-    assert base != AggregateMetadata.create_uid_from_context(
-        field_name="k2", context_models=("m1",), context_params=("p1",)
-    )
-    assert base != AggregateMetadata.create_uid_from_context(
-        field_name="k", context_models=("m2",), context_params=("p1",)
-    )
-    assert base != AggregateMetadata.create_uid_from_context(
-        field_name="k", context_models=("m1",), context_params=("p2",)
-    )
+@pytest.mark.parametrize(
+    ("field", "members", "directed", "digest"),
+    [
+        (
+            "f",
+            (),
+            False,
+            "b9dbb008291882d546f739ec9b1aae9d688961ba34272028524a873aa594e897",
+        ),
+        (
+            "k",
+            ("q2", "q1", "q1"),
+            False,
+            "df6bf94922bf4b1cbe24e3f3a1015d1b8de693cb527e29d1a66c257431fb2a7c",
+        ),
+        (
+            "k",
+            ("q2", "q1"),
+            True,
+            "ad8d8486930e7f5835a5719c24217492de1d22631f26396f4dee992413ad6e03",
+        ),
+        (
+            "k",
+            ("q1", "q2"),
+            True,
+            "bb96bf2973d2a53eedca3fa01cef65c1aa7de0a65ec30c1371b4e6784f6cd9b1",
+        ),
+    ],
+)
+def test_aggregate_identity_bytes(field, members, directed, digest) -> None:
+    assert aggregate_identity(field, members, directed=directed).uid == digest

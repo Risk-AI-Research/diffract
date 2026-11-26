@@ -15,6 +15,7 @@ from hypothesis import (
     strategies as st,
 )
 from hypothesis.extra import numpy as hnp
+from scipy import linalg
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -55,6 +56,109 @@ def test_svd_singular_values_match_reference(ram_container) -> None:
     reference = np.sort(np.linalg.svd(mat, compute_uv=False))
 
     np.testing.assert_allclose(svals, reference, rtol=1e-12)
+
+
+def test_host_memory_probe_on_supported_platforms() -> None:
+    import sys
+
+    from diffract.core.compute.execution.host_memory import available_host_bytes
+
+    if sys.platform not in {"darwin", "linux", "win32"}:
+        pytest.skip("The host memory probe does not cover this platform")
+    available = available_host_bytes()
+    assert available is not None
+    assert available >= 0
+
+
+def test_cpu_svd_rejects_insufficient_workspace_before_calling_lapack(
+    ram_container, monkeypatch
+) -> None:
+    from diffract import Session
+    from diffract.core.compute.extensions import svd_workspace
+    from diffract.session import SessionError
+
+    matrix = np.eye(64, dtype=np.float32)
+    estimate = svd_workspace.estimate_svd_workspace_bytes(matrix, vectors=True)
+    assert estimate > matrix.nbytes
+    monkeypatch.setattr(svd_workspace, "available_host_bytes", lambda: estimate)
+
+    def unexpected_svd(*args, **kwargs):
+        pytest.fail("LAPACK was called despite the memory budget")
+
+    monkeypatch.setattr(linalg, "svd", unexpected_svd)
+    with Session(container=ram_container) as session:
+        session.models.add({"w": matrix}, model_id="net")
+        session.compute.configure_kernel("weights_svd", allow_cuda=False)
+        with pytest.raises(
+            SessionError, match=r"CPU SVD for \(64, 64\).*working memory"
+        ):
+            session.compute.apply("weights_svals")
+        (status,) = session.results.status("weights_svals")
+        assert status.status == "never computed"
+
+
+def test_local_svd_loads_each_parameter_when_it_is_executed(
+    tmp_path, monkeypatch
+) -> None:
+    from diffract import Session
+    from diffract.core.storage.catalog_manager import CatalogStorageManager
+
+    monkeypatch.chdir(tmp_path)
+    with Session(profile="local") as seed:
+        seed.models.add({"a": np.eye(4), "b": np.eye(5)}, model_id="net")
+
+    calls = []
+    read_pointer = CatalogStorageManager.read_pointer
+    svd = linalg.svd
+
+    def log_read(self, pointer):
+        if pointer.storage_key.endswith("/weights"):
+            calls.append("read")
+        return read_pointer(self, pointer)
+
+    def log_svd(*args, **kwargs):
+        calls.append("svd")
+        return svd(*args, **kwargs)
+
+    monkeypatch.setattr(CatalogStorageManager, "read_pointer", log_read)
+    monkeypatch.setattr(linalg, "svd", log_svd)
+    with Session(profile="local") as session:
+        session.compute.configure_kernel("weights_svd", allow_cuda=False)
+        session.compute.apply("weights_svals")
+        assert calls == ["read", "svd", "read", "svd"]
+        values = session.results.export_metrics("weights_svals", export_format="dict")
+        assert len(values) == 2
+        for row in values.values():
+            np.testing.assert_array_equal(row["fields"]["weights_svals"], 1)
+
+
+def test_random_spectrum_writes_vectors_only_when_requested(ram_container) -> None:
+    from diffract import Session
+
+    weights = np.random.default_rng(3).standard_normal((18, 7), dtype=np.float32)
+    with Session(container=ram_container) as session:
+        session.models.add({"layer": weights}, model_id="net")
+        summary = session.compute.apply("weights_rand_svals")
+        assert summary.parameter_fields == ("weights_rand", "weights_rand_svals")
+        fields = session.results.export_metrics(
+            "weights_rand", "weights_rand_svals", export_format="dict"
+        )
+        (row,) = fields.values()
+        shuffled = row["fields"]["weights_rand"]
+        spectrum = row["fields"]["weights_rand_svals"]
+        expected = np.sort(np.linalg.svd(shuffled, full_matrices=False)[1])
+        np.testing.assert_allclose(spectrum, expected, rtol=1e-6)
+
+        summary = session.compute.apply("weights_rand_lsvs")
+        assert summary.parameter_fields == ("weights_rand_lsvs", "weights_rand_rsvs")
+        fields = session.results.export_metrics(
+            "weights_rand_lsvs", "weights_rand_rsvs", export_format="dict"
+        )
+        (row,) = fields.values()
+        left, right = (row["fields"][f"weights_rand_{side}svs"] for side in ("l", "r"))
+        np.testing.assert_allclose(
+            (left * spectrum) @ right.T, shuffled, rtol=1e-5, atol=1e-6
+        )
 
 
 @pytest.mark.gpu

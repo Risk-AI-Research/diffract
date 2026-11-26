@@ -69,7 +69,6 @@ class IMetadata(Protocol):
 
 
 TMetadata = TypeVar("TMetadata", bound=IMetadata)
-TProxy = TypeVar("TProxy", bound="IDataProxy")
 
 
 @runtime_checkable
@@ -82,17 +81,19 @@ class IDataProxy(Protocol[TMetadata]):
     be interpreted as an owner of storage/cache managers.
     """
 
-    @property
-    def meta(self) -> TMetadata:
-        """Metadata for this entity."""
-        ...
+    meta: TMetadata
 
-    def set_field(self, name: str, value: Any) -> None:
+    def set_field(self, name: str, value: Any, *, initial: bool = False) -> None:
         """Store a named field for this entity."""
         ...
 
     def get_field(
-        self, name: str, default: Any | None = None, auto_prefetch: bool = True
+        self,
+        name: str,
+        default: Any | None = None,
+        auto_prefetch: bool = True,
+        *,
+        kernel_input: bool = False,
     ) -> Any:
         """Retrieve a named field for this entity (cache-first)."""
         ...
@@ -131,7 +132,7 @@ class IDataProxy(Protocol[TMetadata]):
 
 
 @runtime_checkable
-class IDataRepository(Protocol[TMetadata, TProxy]):
+class IDataRepository[TMetadata: IMetadata, TProxy: IDataProxy](Protocol):
     """Protocol for a repository owning storage and cache infrastructure.
 
     Defines the interface for repositories that exclusively own and manage
@@ -139,6 +140,18 @@ class IDataRepository(Protocol[TMetadata, TProxy]):
     single source of truth for persistent data and acts as the exclusive
     owner of the underlying storage and caching infrastructure.
     """
+
+    TABLE: str
+
+    def list_uids(self) -> list[str]:
+        """List the UIDs held by the repository."""
+        ...
+
+    def erase_values(
+        self, uids: Sequence[str], fields: Sequence[str] | None = None
+    ) -> int:
+        """Erase selected values and count affected owners."""
+        ...
 
     @property
     def storage_manager(self) -> IStorageManager:
@@ -215,13 +228,26 @@ type FieldName = str
 
 
 @runtime_checkable
-class IDataView(Protocol[TMetadata, TProxy]):
+class IDataView[TMetadata: IMetadata, TProxy: IDataProxy](Protocol):
     """Protocol for a view with filtering and data access.
 
     Defines the interface for views that provide efficient batch
     operations and data access. Views support filtering and provide
     convenient access to data through proxies.
     """
+
+    def __enter__(self) -> Self:
+        """Open the repository's field storage for a batch."""
+        ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Flush and close the storage batch."""
+        ...
 
     def __len__(self) -> int:
         """Return the number of entities in this view."""
@@ -238,13 +264,13 @@ class IDataView(Protocol[TMetadata, TProxy]):
     def __getitem__(self, index: slice) -> Self: ...
 
     @overload
-    def __getitem__(self, uid: EntityUID) -> TProxy: ...
+    def __getitem__(self, index: EntityUID) -> TProxy: ...  # type: ignore[overload-overlap]  # str is a scalar UID
 
     @overload
-    def __getitem__(self, indices: Sequence[EntityIndex]) -> Self: ...
+    def __getitem__(self, index: Sequence[EntityIndex]) -> Self: ...
 
     @overload
-    def __getitem__(self, uids: Sequence[EntityUID]) -> Self: ...
+    def __getitem__(self, index: Sequence[EntityUID]) -> Self: ...
 
     def __getitem__(
         self,

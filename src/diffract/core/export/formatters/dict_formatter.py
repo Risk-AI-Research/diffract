@@ -20,14 +20,14 @@ class DictFormatter(IResultFormatter):
         self,
         param_results: ResultData,
         aggregate_results: AggregateData,
-        _fields: tuple[str, ...],
+        fields: tuple[str, ...],  # noqa: ARG002 - formatter interface
     ) -> StructuredExportResult[dict]:
         """Return results as structured dict with scalars and aggregates.
 
         Args:
             param_results: Parameter results dictionary with scalar fields.
             aggregate_results: Aggregate results list with contextual fields.
-            _fields: Field names (unused for dict format).
+            fields: Field names (unused for dict format).
 
         Returns:
             StructuredExportResult with scalars dict and aggregates list.

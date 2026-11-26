@@ -8,6 +8,7 @@ component for kernel discovery, validation, and execution orchestration.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from copy import deepcopy
 from functools import wraps
@@ -15,17 +16,21 @@ from typing import TYPE_CHECKING, Any
 
 from ordered_set import OrderedSet
 
-from .config import KernelConfig
+from .config import KernelConfig, KernelResult
 from .exceptions import (
     CircularDependencyError,
     DependencyNotFoundError,
     InvalidConfiguration,
 )
 from .execution import KernelApplyLevel, KernelExecutionProtocol, KernelRestrictions
+from .execution.traces import EXACT_OUTPUT_COMPARISON
 from .metadata import KernelInfo, KernelMetadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from .config import KernelConfigIdentity, OutputComparison
+    from .metadata import ExecutionBinding
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ class KernelRegistry:
         """Initialize empty registry with metadata storage and resolution cache."""
         self._metadata: dict[str, KernelMetadata] = {}
         self._resolve_cache: dict[str, tuple[str, ...]] = {}
+        self._field_producers: dict[str, str] = {}
 
     @staticmethod
     def _split_signature(
@@ -96,6 +102,12 @@ class KernelRegistry:
         restrictions: KernelRestrictions | None,
         config: KernelConfig,
         info: KernelInfo | None = None,
+        symmetric: bool | None = None,
+        version: str = "1",
+        output_comparison: OutputComparison | None = None,
+        stream_inputs: bool = False,
+        bind_execution: ExecutionBinding | None = None,
+        builtin: bool = False,
     ) -> None:
         """Register a kernel and its metadata in the registry.
 
@@ -113,10 +125,26 @@ class KernelRegistry:
             restrictions: Optional argument restrictions.
             config: Configuration parameters with defaults.
             info: Optional documentation metadata.
+            symmetric: For pair kernels, whether swapping operands preserves the result.
+                None selects ordinary group aggregation.
+            version: Explicit revision of the kernel behavior.
+            output_comparison: Optional override of scalar output equivalence.
+            bind_execution: Bind runtime settings to a traced implementation.
+            builtin: Whether this registration belongs to the built-in manifest.
+            stream_inputs: Load arguments on demand for a sequential parameter kernel.
         """
         if not isinstance(config, KernelConfig):
             config = KernelConfig(**(config or {}))
-        cfg = deepcopy(config)
+        if type(version) is not str or not version.strip():
+            raise InvalidConfiguration("A kernel version must be a non-empty string")
+        if stream_inputs and (
+            apply_level is not KernelApplyLevel.PARAMETER
+            or execution_protocol is KernelExecutionProtocol.PARALLEL
+        ):
+            raise InvalidConfiguration(
+                "Streaming inputs requires a sequential parameter kernel"
+            )
+        cfg = config.copy_for_registration()
         info = KernelInfo() if info is None else info
         meta = KernelMetadata(
             name,
@@ -128,9 +156,19 @@ class KernelRegistry:
             restrictions,
             cfg,
             info,
+            symmetric,
+            version,
+            output_comparison,
+            stream_inputs,
+            bind_execution,
+            builtin,
         )
         self._metadata[name] = meta
         self._resolve_cache.clear()
+        self._field_producers.clear()
+        for producer in sorted(self._metadata):
+            for field in self._metadata[producer].produce_fields:
+                self._field_producers.setdefault(field, producer)
         logger.debug(
             "Registered kernel '%s' (requires=%s, produce=%s)",
             name,
@@ -153,6 +191,8 @@ class KernelRegistry:
             InvalidConfiguration: If configuration contains invalid parameters.
         """
         meta = self._get(name)
+        if meta.bind_execution is not None:
+            meta.bind_execution(meta.config.as_dict() | conf.as_dict())
         meta.config.update(conf)
         logger.debug("Configured kernel '%s' with %s", name, conf.as_dict())
 
@@ -226,7 +266,24 @@ class KernelRegistry:
         Returns:
             True if any kernel can produce the field, False otherwise.
         """
-        return name in self.list_fields_can_produce()
+        return name in self._field_producers
+
+    def get_kernel_symmetry(self, name: str) -> bool | None:
+        """Return pair symmetry, or None for a kernel over an ordinary group."""
+        return self._get(name).symmetric
+
+    def get_output_comparison(self, name: str) -> OutputComparison | None:
+        """Use exact scalar equality downstream of a precision-bound solver."""
+        declared = self._get(name).output_comparison
+        if declared is not None:
+            return declared
+        if any(self._get(k).bind_execution for k in self.resolve_dependencies(name)):
+            return EXACT_OUTPUT_COMPARISON
+        return None
+
+    def streams_inputs(self, name: str) -> bool:
+        """Whether the parameter runner should load inputs on demand."""
+        return self._get(name).stream_inputs
 
     def get_kernel_apply_level(self, name: str) -> KernelApplyLevel:
         """Get kernel application level.
@@ -298,6 +355,13 @@ class KernelRegistry:
         """
         return self._get(name).config.as_dict()
 
+    def get_kernel_config_identity(self, name: str) -> KernelConfigIdentity:
+        """Return the current versioned configuration snapshot for a kernel."""
+        meta = self._get(name)
+        if meta.bind_execution is not None:
+            return self.capture_kernel_execution(name)[0]
+        return meta.config.identity(meta.name, meta.version)
+
     def get_kernel_restrictions(self, name: str) -> KernelRestrictions:
         """Get kernel argument restrictions.
 
@@ -327,15 +391,43 @@ class KernelRegistry:
         Raises:
             DependencyNotFoundError: If kernel is not registered.
         """
-        impl = self._get(name).implementation
-        cfg = self.get_kernel_config(name)
+        meta = self._get(name)
+        return self._bind_configuration(meta.implementation, meta.config.as_dict())
 
+    def capture_kernel_execution(
+        self, name: str
+    ) -> tuple[KernelConfigIdentity, Callable[..., Any]]:
+        """Capture the configuration and callable used for one recorded run."""
+        meta = self._get(name)
+        if meta.bind_execution is not None:
+            config = meta.config.copy_for_registration()
+            settings, implementation = meta.bind_execution(config.as_dict())
+            return config.identity(
+                name, meta.version, execution=settings
+            ), implementation
+        snapshot = meta.config.identity(meta.name, meta.version)
+        cfg = json.loads(snapshot.config_json)
+        return snapshot, self._bind_configuration(
+            meta.implementation,
+            cfg,
+            copy_nested=any(isinstance(value, (list, dict)) for value in cfg.values()),
+        )
+
+    @staticmethod
+    def _bind_configuration(
+        impl: Callable[..., Any], cfg: dict[str, Any], *, copy_nested: bool = False
+    ) -> Callable[..., Any]:
         @wraps(impl)
         def wrapped(*args: Any, **kwargs: Any) -> Any:
-            merged = {**cfg, **kwargs}
+            configured = deepcopy(cfg) if copy_nested else cfg
+            merged = {**configured, **kwargs}
             return impl(*args, **merged)
 
         return wrapped
+
+    def is_builtin(self, name: str) -> bool:
+        """Whether the implementation came from the built-in kernel manifest."""
+        return self._get(name).builtin
 
     def get_kernel_info(self, name: str) -> KernelInfo:
         """Get kernel documentation metadata.
@@ -419,10 +511,8 @@ class KernelRegistry:
         Raises:
             ValueError: If no kernel produces the specified field.
         """
-        for kernel in self.list_kernels():
-            kernel_meta = self._get(kernel)
-            if field_name in kernel_meta.produce_fields:
-                return kernel
+        if field_name in self._field_producers:
+            return self._field_producers[field_name]
         raise ValueError
 
     def resolve_produced_fields(self, field_or_kernel_name: str) -> set[str]:
@@ -461,6 +551,9 @@ class KernelRegistry:
             DependencyNotFoundError: If kernel is not registered.
         """
         meta = self._get(kernel_name)
+
+        if isinstance(result, KernelResult):
+            result = result.value
 
         if isinstance(result, dict):
             return result

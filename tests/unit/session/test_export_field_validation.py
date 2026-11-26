@@ -214,6 +214,8 @@ def test_ingested_aggregate_field_exports_without_registry_entry(
     ram_container,
 ) -> None:
     session = Session(container=ram_container)
+    for model in ("m1", "m2"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {

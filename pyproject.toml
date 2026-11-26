@@ -124,10 +124,11 @@ dev = [
     "pytest-xdist >=3.3.0",
     "pytest-timeout >=2.4.0",
     "ruff >=0.9.0",
+    "safetensors >=0.4.0",
     "sybil >=6.0.0",
     "types-PyYAML >=6.0.0",
     "types-requests >=2.31.0",
-    "zarr >=2.18.0",
+    "zarr >=3.0.0",
     "fsspec >=2024.2.0",
     "plotly >=6.0.0",
     "kaleido >=0.2.1",
@@ -289,7 +290,7 @@ skips = ["*_test.py", "test_*.py", "conftest.py"]
 
 [tool.codespell]
 skip = "*.git,*.svg,*.pdf,*.pyc,__pycache__,*.egg-info,.mypy_cache,.pytest_cache,.coverage,htmlcov"
-ignore-words-list = "nd,te,ser"
+ignore-words-list = "fro,nd,te,ser"
 check-filenames = true
 check-hidden = true
 

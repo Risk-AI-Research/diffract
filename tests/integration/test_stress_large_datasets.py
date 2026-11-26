@@ -8,12 +8,11 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.stress, pytest.mark.slow]
 
 
-def test_stress_large_arrays_hybrid(
-    redis_cache_manager, hybrid_storage_manager
-) -> None:
+def test_stress_large_arrays_hybrid(hybrid_storage_manager) -> None:
     """Stress test: 1GB+ arrays through Hybrid storage."""
     from .helpers import create_large_array, measure_memory_usage
 
+    pytest.importorskip("psutil", reason="psutil is needed for the RSS assertion")
     storage = hybrid_storage_manager
 
     # Create multiple large arrays (total > 1GB)
@@ -34,6 +33,8 @@ def test_stress_large_arrays_hybrid(
         stored = storage.get_field(uid, field)
         assert stored.shape == large_array.shape
         np.testing.assert_allclose(stored, large_array, rtol=1e-5)
+        # Measure memory retained by the backend after each caller releases its arrays.
+        del large_array, stored
 
     mem_after = measure_memory_usage()
 

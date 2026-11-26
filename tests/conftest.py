@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 import rootutils
 
+from diffract.core.data.metadata.sqlite_index import SQLiteMetadataIndex
+
 _ROOT = rootutils.setup_root(__file__, dotenv=True, pythonpath=True, cwd=False)
 
 # Redis test configuration
@@ -92,163 +94,20 @@ class InMemoryCache(InMemoryStorage):
         self._store.setdefault(obj_uid, {})[field_name] = value
 
 
-class InMemoryMetadataIndex:
-    """Simple in-memory metadata index for test doubles."""
-
-    def __init__(self) -> None:
-        self._tables: dict[str, dict[str, dict[str, Any]]] = {}
-        self._schemas: dict[str, dict[str, type]] = {}
-
-    def __enter__(self) -> "InMemoryMetadataIndex":
-        return self
-
-    def __exit__(self, _exc_type: object, _exc_val: object, _exc_tb: object) -> None:
-        return None
-
-    def define_table(
-        self,
-        table: str,
-        columns: dict[str, type],
-        indexes: list[str] | None = None,
-    ) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._schemas[table] = columns
-
-    def insert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._tables[table][uid] = {"uid": uid, **fields}
-
-    def update(self, table: str, uid: str, **fields: Any) -> None:
-        if table in self._tables and uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-
-    def upsert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        if uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-        else:
-            self._tables[table][uid] = {"uid": uid, **fields}
-
-    def get(self, table: str, uid: str) -> dict[str, Any] | None:
-        if table not in self._tables:
-            return None
-        return self._tables[table].get(uid)
-
-    def get_batch(self, table: str, uids: list[str]) -> list[dict[str, Any] | None]:
-        if table not in self._tables:
-            return [None] * len(uids)
-        return [self._tables[table].get(uid) for uid in uids]
-
-    def query(
-        self,
-        table: str,
-        where: dict[str, Any] | None = None,
-        where_in: dict[str, list[Any]] | None = None,
-        where_like: dict[str, str] | None = None,
-        order_by: list[str] | None = None,
-        limit: int | None = None,
-    ) -> list[str]:
-        if table not in self._tables:
-            return []
-
-        results = []
-        for uid, record in self._tables[table].items():
-            match = True
-
-            if where:
-                for col, val in where.items():
-                    if record.get(col) != val:
-                        match = False
-                        break
-
-            if match and where_in:
-                for col, vals in where_in.items():
-                    if col == "uid":
-                        if uid not in vals:
-                            match = False
-                            break
-                    elif record.get(col) not in vals:
-                        match = False
-                        break
-
-            if match and where_like:
-                import re
-
-                for col, pattern in where_like.items():
-                    # Convert SQL LIKE to regex
-                    regex = pattern.replace("%", ".*").replace("_", ".")
-                    if not re.match(regex, str(record.get(col, ""))):
-                        match = False
-                        break
-
-            if match:
-                results.append(uid)
-
-        if order_by:
-            for col in reversed(order_by):
-                results.sort(key=lambda u: self._tables[table][u].get(col, ""))
-
-        if limit is not None:
-            results = results[:limit]
-
-        return results
-
-    def delete(self, table: str, uid: str) -> None:
-        if table in self._tables:
-            self._tables[table].pop(uid, None)
-
-    def delete_batch(self, table: str, uids: list[str]) -> None:
-        if table in self._tables:
-            for uid in uids:
-                self._tables[table].pop(uid, None)
-
-    def count(self, table: str, where: dict[str, Any] | None = None) -> int:
-        if table not in self._tables:
-            return 0
-        if where is None:
-            return len(self._tables[table])
-        return len(self.query(table, where=where))
-
-    def distinct(self, table: str, column: str) -> list[Any]:
-        if table not in self._tables:
-            return []
-        values = set()
-        for record in self._tables[table].values():
-            if column in record:
-                values.add(record[column])
-        return list(values)
-
-    def list_uids(self, table: str) -> list[str]:
-        if table not in self._tables:
-            return []
-        return list(self._tables[table].keys())
-
-    def clear(self, table: str | None = None) -> None:
-        if table is None:
-            self._tables.clear()
-        elif table in self._tables:
-            self._tables[table].clear()
-
-    def connect(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
 @pytest.fixture
 def storage_cache() -> tuple[InMemoryStorage, InMemoryCache]:
     return InMemoryStorage(), InMemoryCache()
 
 
 @pytest.fixture
-def storage_cache_metadata() -> tuple[
-    InMemoryStorage, InMemoryCache, InMemoryMetadataIndex
+def storage_cache_metadata() -> Generator[
+    tuple[InMemoryStorage, InMemoryCache, SQLiteMetadataIndex]
 ]:
-    return InMemoryStorage(), InMemoryCache(), InMemoryMetadataIndex()
+    index = SQLiteMetadataIndex(":memory:")
+    try:
+        yield InMemoryStorage(), InMemoryCache(), index
+    finally:
+        index.close()
 
 
 @pytest.fixture

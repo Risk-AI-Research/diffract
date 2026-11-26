@@ -47,3 +47,10 @@ def is_style_literal(value: str, kind: StyleLiteralKind) -> bool:
     except ValueError:
         return False
     return True
+
+
+def coerce_style_source[T](value: T, kind: StyleLiteralKind) -> T | FieldRef:
+    """Keep valid style literals and resolve other strings as field references."""
+    if isinstance(value, str) and not is_style_literal(value, kind):
+        return FieldRef(field=value)
+    return value

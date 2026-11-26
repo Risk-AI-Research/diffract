@@ -21,6 +21,7 @@ from dependency_injector import containers, providers
 
 from diffract.core.utils.build import build_with_defaults
 
+from .catalog_manager import CatalogStorageManager
 from .hdf5_manager import HDF5StorageManager
 from .hybrid_manager import HybridStorageManager
 from .interface import IStorageManager
@@ -93,13 +94,22 @@ class StorageContainer(containers.DeclarativeContainer):
         array_threshold=config.hybrid.array_threshold,
     )
 
-    storage_manager = providers.Selector(
+    physical_store = providers.Selector(
         config.backend,
         hdf5=hdf5_manager,
         ram=ram_manager,
         sqlite=sqlite_manager,
         hybrid=hybrid_manager,
         zarr=zarr_manager,
+    )
+
+    metadata_index = providers.Dependency(default=providers.Object(None))
+    storage_manager = providers.Singleton(
+        lambda backend, index: backend
+        if index is None
+        else CatalogStorageManager(backend, index),
+        physical_store,
+        metadata_index,
     )
 
     storage_manager_resource = providers.Resource(
@@ -109,7 +119,9 @@ class StorageContainer(containers.DeclarativeContainer):
 
 
 @contextmanager
-def _connect_wrapper(manager: IStorageManager) -> Generator[None, None, None]:
+def _connect_wrapper(
+    manager: IStorageManager,
+) -> Generator[IStorageManager, None, None]:
     logger.debug("Init resource: %s", manager.__class__.__name__)
     if hasattr(manager, "connect"):
         logger.debug("Init connection for: %s", manager.__class__.__name__)

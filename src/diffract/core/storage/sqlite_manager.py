@@ -12,7 +12,8 @@ import os
 import sqlite3
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from contextlib import closing, contextmanager, suppress
+from contextlib import ExitStack, closing, contextmanager, suppress
+from itertools import batched
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, Self
@@ -23,14 +24,64 @@ from diffract.core.utils.exceptions import format_exception_message
 
 from .base_manager import BaseStorageManager
 from .interface import DEFAULT_TABLE, UID
+from .keys import is_catalog_owner, is_legacy_sqlite_key, legacy_sqlite_key, row_address
 from .metadata import infer_value_metadata
+from .row_blobs import RowBlobs
 from .serialization import decode_value, encode_value
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
     from types import TracebackType
 
+
 logger = logging.getLogger(__name__)
+
+
+# Bulk array values span many pages. Keep the checkpoint interval near 4 MB
+# regardless of the page size already recorded by an existing database.
+_VALUE_PAGE_SIZE = 64 * 1024
+_WAL_CHECKPOINT_BYTES = 1000 * 4096
+
+
+def iter_storage_rows(path: Path, tables: tuple[str, ...]) -> Generator[tuple]:
+    """Stream encoded rows without loading user objects during migration."""
+    placeholders = ",".join("?" for _ in tables)
+    query = (
+        "SELECT table_name, field, obj_uid, value_type, value_data, "  # nosec B608
+        f"file_path, value_meta FROM storage WHERE table_name IN ({placeholders})"
+    )
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        yield from db.execute(query, tables)
+
+
+def has_catalog_rows(path: Path) -> bool:
+    """Check the catalog namespace without loading stored values."""
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        owners = db.execute("SELECT DISTINCT obj_uid FROM storage WHERE table_name=''")
+        return any(is_catalog_owner(uid) for (uid,) in owners)
+
+
+def legacy_row_keys(path: Path) -> set[tuple[str, str, str]]:
+    """Return namespaced row keys, including hybrid-routing markers."""
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        return set(
+            db.execute(
+                "SELECT table_name, field, obj_uid FROM storage "
+                "WHERE table_name IN ('parameters','aggregates')"
+            )
+        )
+
+
+def external_array_paths(path: Path) -> list[Path]:
+    """List the external arrays referenced by a snapshot of the value database."""
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        return [
+            Path(v)
+            for (v,) in db.execute(
+                "SELECT DISTINCT file_path FROM storage "
+                "WHERE file_path IS NOT NULL AND file_path != ''"
+            )
+        ]
 
 
 class ConnectionPool:
@@ -70,7 +121,7 @@ class ConnectionPool:
         self._max_overflow = max_overflow
         self._pool: Queue[sqlite3.Connection] = Queue(maxsize=pool_size)
         self._created_connections = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._initialized = False
 
     def _initialize_pool(self) -> None:
@@ -173,9 +224,10 @@ class ConnectionPool:
         This method is idempotent - calling it multiple times has no effect
         after the first call.
         """
-        if not self._initialized:
-            self._initialize_pool()
-            self._initialized = True
+        with self._lock:
+            if not self._initialized:
+                self._initialize_pool()
+                self._initialized = True
 
     def close_all(self) -> None:
         """Close all connections in the pool."""
@@ -197,7 +249,7 @@ class ConnectionPool:
             self.close_all()
 
 
-class SQLiteStorageManager(BaseStorageManager):
+class SQLiteStorageManager(RowBlobs, BaseStorageManager):
     """SQLite storage manager with optimized concurrent read support.
 
     This implementation uses a connection pool for read operations and a
@@ -215,6 +267,8 @@ class SQLiteStorageManager(BaseStorageManager):
         - Protected by write lock
         - WAL mode allows concurrent reads during writes
     """
+
+    backend_name = "sqlite"
 
     def __init__(
         self,
@@ -303,14 +357,21 @@ class SQLiteStorageManager(BaseStorageManager):
             ("synchronous", self._synchronous),
             ("cache_size", -self._cache_size_kb),
             ("temp_store", "MEMORY"),
-            ("page_size", 4096),
             ("mmap_size", self._write_mmap_size) if not self._readonly else None,
         ]
         with closing(self._write_conn.cursor()) as cur:
+            writable_wal = self._wal_mode and not self._readonly
+            if writable_wal and cur.execute("PRAGMA page_count").fetchone()[0] == 0:
+                cur.execute(f"PRAGMA page_size={_VALUE_PAGE_SIZE}")
             for pragma in pragmas:
                 if pragma:
                     key, value = pragma
                     cur.execute(f"PRAGMA {key}={value}")
+            if writable_wal:
+                page_size = cur.execute("PRAGMA page_size").fetchone()[0]
+                cur.execute(
+                    f"PRAGMA wal_autocheckpoint={_WAL_CHECKPOINT_BYTES // page_size}"
+                )
 
     def _init_schema(self) -> None:
         """Initialize database schema with table support."""
@@ -474,28 +535,31 @@ class SQLiteStorageManager(BaseStorageManager):
     @contextmanager
     def _transaction(self) -> Generator[None, None, None]:
         """Context manager for write transactions."""
-        acquired = False
-        try:
-            if self._context_depth == 0:
-                self._write_lock.acquire()
-                acquired = True
+        with self._write_lock:
+            outermost = self._context_depth == 0
+            if outermost:
+                if self._write_conn is None:
+                    self.connect()
                 self._write_conn.execute("BEGIN IMMEDIATE")
             self._context_depth += 1
-            yield
-            self._context_depth -= 1
-            if self._context_depth == 0 and acquired:
-                self._write_conn.execute("COMMIT")
-        except Exception:
-            self._context_depth = max(0, self._context_depth - 1)
-            if self._context_depth == 0 and acquired:
-                self._write_conn.execute("ROLLBACK")
-            raise
-        finally:
-            if self._context_depth == 0 and acquired:
-                self._write_lock.release()
+            try:
+                yield
+                if outermost:
+                    self._write_conn.commit()
+            except BaseException:
+                if outermost:
+                    self._write_conn.rollback()
+                raise
+            finally:
+                self._context_depth -= 1
 
     def _execute_read(
-        self, query: str, params: tuple = (), fetchall: bool = True
+        self,
+        query: str,
+        params: tuple = (),
+        fetchall: bool = True,
+        *,
+        writer: bool = False,
     ) -> list[tuple]:
         """Execute read query using connection pool.
 
@@ -503,6 +567,7 @@ class SQLiteStorageManager(BaseStorageManager):
             query: SQL query string.
             params: Query parameters.
             fetchall: Whether to fetch all rows.
+            writer: Read within the calling thread's active write transaction.
 
         Returns:
             Query results as list of tuples.
@@ -514,7 +579,7 @@ class SQLiteStorageManager(BaseStorageManager):
             if self._write_conn is None:
                 self.connect()
 
-            if self._read_pool is not None:
+            if self._read_pool is not None and not writer:
                 with self._read_pool.acquire() as conn, closing(conn.cursor()) as cur:
                     if fetchall:
                         return cur.execute(query, params).fetchall()
@@ -559,6 +624,53 @@ class SQLiteStorageManager(BaseStorageManager):
             msg = f"SQLite error: {format_exception_message(e)}"
             raise OSError(msg) from e
 
+    def move_blob(self, source: str, target: str) -> None:
+        """Update a physical row key and its indexes in one SQLite transaction."""
+        src = row_address(source)
+        dst = row_address(target)
+        if self._write_conn is None:
+            self.connect()
+        with self._transaction(), closing(self._write_conn.cursor()) as cursor:
+            self.move_row(cursor, src, dst)
+
+    @staticmethod
+    def move_row(
+        cursor: sqlite3.Cursor, src: tuple[str, str, str], dst: tuple[str, str, str]
+    ) -> None:
+        """Move a row and update its registries inside the caller's transaction."""
+        if not cursor.execute(
+            "SELECT 1 FROM storage WHERE table_name=? AND field=? AND obj_uid=?",
+            src,
+        ).fetchone():
+            raise KeyError(src)
+        if src == dst:
+            return
+        if cursor.execute(
+            "SELECT 1 FROM storage WHERE table_name=? AND field=? AND obj_uid=?",
+            dst,
+        ).fetchone():
+            raise FileExistsError(str(dst))
+        cursor.execute(
+            "UPDATE storage SET table_name=?, field=?, obj_uid=? "
+            "WHERE table_name=? AND field=? AND obj_uid=?",
+            dst + src,
+        )
+        for registry, column, old, new in (
+            ("field_registry", "field", src[1], dst[1]),
+            ("obj_registry", "obj_uid", src[2], dst[2]),
+        ):
+            cursor.execute(
+                f"INSERT OR IGNORE INTO {registry} (table_name,{column}) "  # nosec B608
+                "VALUES (?,?)",  # nosec B608 - static registry names
+                (dst[0], new),
+            )
+            cursor.execute(
+                f"DELETE FROM {registry} WHERE table_name=? AND {column}=? "  # nosec B608 - static registry names
+                f"AND NOT EXISTS (SELECT 1 FROM storage "
+                f"WHERE table_name=? AND {column}=?)",
+                (src[0], old, src[0], old),
+            )
+
     def _has_field(
         self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
     ) -> bool:
@@ -584,8 +696,47 @@ class SQLiteStorageManager(BaseStorageManager):
         except OSError:
             return False
 
+    def read_blob(self, key: str) -> Any:
+        """Read the physical value paired with the calling transaction's catalog."""
+        table, field, uid = row_address(key)
+        self._auto_flush_before_read()
+        return self._get_field(
+            uid,
+            field,
+            table=table,
+            writer=self._in_batch_context,
+            legacy_scalar=is_legacy_sqlite_key(key),
+        )
+
+    def catalog_blob_keys(self) -> set[str]:
+        """List catalog-format SQLite keys without fetching value payloads."""
+        rows = self._execute_read(
+            "SELECT obj_uid,field FROM storage WHERE table_name=''", ()
+        )
+        return {f"{uid}/{field}" for uid, field in rows}
+
+    def missing_catalog_arrays(self) -> set[str]:
+        """Find catalog row keys whose external array files are absent."""
+        rows = self._execute_read(
+            "SELECT table_name,field,obj_uid,file_path FROM storage "
+            "WHERE table_name IN ('','parameters','aggregates') "
+            "AND value_type='ndarray' AND file_path IS NOT NULL AND file_path != ''",
+            (),
+        )
+        return {
+            legacy_sqlite_key(table, field, uid) if table else f"{uid}/{field}"
+            for table, field, uid, path in rows
+            if not Path(path).is_file()
+        }
+
     def _get_field(
-        self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
+        self,
+        obj_uid: UID,
+        field_name: str,
+        *,
+        table: str = DEFAULT_TABLE,
+        writer: bool = False,
+        legacy_scalar: bool = False,
     ) -> Any:
         """Retrieve field value.
 
@@ -593,6 +744,8 @@ class SQLiteStorageManager(BaseStorageManager):
             obj_uid: Object unique identifier.
             field_name: Field name.
             table: Table name for logical data separation.
+            writer: Read from the active catalog writer connection.
+            legacy_scalar: Decode a validated legacy numeric scalar.
 
         Returns:
             Field value.
@@ -605,6 +758,7 @@ class SQLiteStorageManager(BaseStorageManager):
             "WHERE table_name = ? AND field = ? AND obj_uid = ?",
             (table, field_name, obj_uid),
             fetchall=False,
+            writer=writer,
         )
 
         if row is None:
@@ -614,6 +768,10 @@ class SQLiteStorageManager(BaseStorageManager):
         dtype, data, file_path = row
         if dtype == "ndarray" and file_path:
             return self._load_large_array(file_path)
+        if legacy_scalar and dtype == "pickle":
+            from .legacy_values import converted_numeric_scalar
+
+            return self._deserialize(converted_numeric_scalar(data), "json")
         return self._deserialize(data, dtype)
 
     def _get_field_metadata(
@@ -637,8 +795,66 @@ class SQLiteStorageManager(BaseStorageManager):
         except OSError:
             return None
 
+    @contextmanager
+    def _metadata_snapshot(self) -> Generator[sqlite3.Cursor, None, None]:
+        self._auto_flush_before_read()
+        if self._write_conn is None:
+            self.connect()
+        try:
+            with ExitStack() as stack:
+                if self._read_pool is None:
+                    stack.enter_context(self._write_lock)
+                    connection = self._write_conn
+                else:
+                    connection = stack.enter_context(self._read_pool.acquire())
+                cursor = stack.enter_context(closing(connection.cursor()))
+                if not connection.in_transaction:
+                    cursor.execute("BEGIN")
+                    stack.callback(connection.rollback)
+                yield cursor
+        except sqlite3.Error as exc:
+            raise OSError(f"SQLite metadata read failed: {exc}") from exc
+
+    def field_metadata_for(
+        self, required: dict[str, list[str]], *, table: str
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Read metadata for selected fields without fetching their payloads."""
+        owners: dict[str, list[str]] = {}
+        for uid, fields in required.items():
+            for field in fields:
+                owners.setdefault(field, []).append(uid)
+        result = {}
+        with self._metadata_snapshot() as cursor:
+            for field, uids in owners.items():
+                for chunk in batched(uids, 500):
+                    slots = ",".join("?" for _ in chunk)
+                    query = (
+                        "SELECT obj_uid,value_meta FROM storage WHERE table_name=? "  # nosec B608
+                        f"AND field=? AND obj_uid IN ({slots})"
+                    )
+                    for uid, raw in cursor.execute(query, (table, field, *chunk)):
+                        with suppress(json.JSONDecodeError, TypeError):
+                            result[uid, field] = json.loads(raw)
+        return result
+
+    def fields_by_owner(
+        self, uids: Sequence[str], *, table: str
+    ) -> dict[str, list[str]]:
+        """List fields for a selection of owners in bounded SQLite queries."""
+        result = {uid: [] for uid in uids}
+        with self._metadata_snapshot() as cursor:
+            for chunk in batched(result, 500):
+                slots = ",".join("?" for _ in chunk)
+                query = (
+                    "SELECT obj_uid,field FROM storage WHERE table_name=? "  # nosec B608
+                    f"AND obj_uid IN ({slots}) ORDER BY obj_uid, field"
+                )
+                for uid, field in cursor.execute(query, (table, *chunk)):
+                    result[uid].append(field)
+        return result
+
     def _list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]:
         """List fields.
 
@@ -959,6 +1175,15 @@ class SQLiteStorageManager(BaseStorageManager):
         finally:
             self._erase_field_for_all_batch.clear()
 
+    def clear_raw_tables(self, protected: set[str]) -> None:
+        """Clear ordinary rows outside the catalog's physical namespaces."""
+        tables = self._execute_read(
+            "SELECT DISTINCT table_name FROM storage", (), fetchall=True
+        )
+        for (table,) in tables:
+            if table not in protected:
+                self.clear(table=table)
+
     def _clear(self, *, table: str | None = None) -> None:
         """Clear data from storage.
 
@@ -985,19 +1210,22 @@ class SQLiteStorageManager(BaseStorageManager):
 
     def connect(self) -> None:
         """Connect to database and initialize schema."""
-        self._write_conn = sqlite3.connect(
-            self._uri,
-            check_same_thread=False,
-            uri=True,
-            timeout=self._timeout,
-            isolation_level=None,
-        )
-        self._apply_pragmas()
-        if not self._readonly:
-            self._init_schema()
+        with self._write_lock:
+            if self._write_conn is not None:
+                return
+            self._write_conn = sqlite3.connect(
+                self._uri,
+                check_same_thread=False,
+                uri=True,
+                timeout=self._timeout,
+                isolation_level=None,
+            )
+            self._apply_pragmas()
+            if not self._readonly:
+                self._init_schema()
 
-        if self._read_pool is not None:
-            self._read_pool.connect()
+            if self._read_pool is not None:
+                self._read_pool.connect()
 
     def close(self) -> None:
         """Close all connections."""
@@ -1012,11 +1240,16 @@ class SQLiteStorageManager(BaseStorageManager):
 
     def __enter__(self) -> Self:
         """Enter batch write context manager with transaction."""
-        if self._context_depth == 0:
-            self._write_lock.acquire()
-            self._write_conn.execute("BEGIN IMMEDIATE")
-
-        return super().__enter__()
+        self._write_lock.acquire()
+        try:
+            if self._context_depth == 0:
+                if self._write_conn is None:
+                    self.connect()
+                self._write_conn.execute("BEGIN IMMEDIATE")
+            return super().__enter__()
+        except BaseException:
+            self._write_lock.release()
+            raise
 
     def __exit__(
         self,
@@ -1038,8 +1271,7 @@ class SQLiteStorageManager(BaseStorageManager):
                     self._write_conn.execute("ROLLBACK")
         finally:
             self._context_depth = max(0, self._context_depth - 1)
-            if self._context_depth == 0:
-                self._write_lock.release()
+            self._write_lock.release()
 
     def __del__(self) -> None:
         """Cleanup on deletion."""

@@ -19,9 +19,8 @@ from diffract.core.export.interface import (
 
 from .base import (
     AGGREGATE_COLUMNS,
-    SCALAR_COLUMNS,
     build_aggregate_records,
-    build_scalar_records,
+    scalar_frame_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,20 +59,8 @@ else:
             Returns:
                 StructuredExportResult with scalars and aggregates DataFrames.
             """
-            if not param_results and not aggregate_results:
-                return StructuredExportResult(
-                    scalars=pd.DataFrame(columns=[*SCALAR_COLUMNS, *fields]),
-                    aggregates=pd.DataFrame(columns=AGGREGATE_COLUMNS),
-                )
-
-            scalar_records = build_scalar_records(param_results)
             aggregate_records = build_aggregate_records(aggregate_results)
-
-            scalars_df = (
-                pd.DataFrame(scalar_records)
-                if scalar_records
-                else pd.DataFrame(columns=[*SCALAR_COLUMNS, *fields])
-            )
+            scalars_df = pd.DataFrame(scalar_frame_columns(param_results, fields))
             aggregates_df = (
                 pd.DataFrame(aggregate_records)
                 if aggregate_records

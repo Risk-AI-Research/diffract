@@ -585,3 +585,107 @@ def test_blob_executor_shutdown_on_close(db_path: str) -> None:
 
     # After close, executor should be None
     assert storage._blob_executor is None
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_bulk_page_size_preserves_existing_databases_and_wal_budget(tmp_path, existing):
+    import sqlite3
+    from contextlib import closing
+
+    path = tmp_path / "values.db"
+    if existing:
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("PRAGMA page_size=4096")
+            db.execute("CREATE TABLE extra(kept INTEGER)")
+            db.execute("INSERT INTO extra VALUES (7)")
+    store = SQLiteStorageManager(str(path))
+    try:
+        store.set_field("owner", "score", 9)
+        db = store._write_conn
+        page_size = db.execute("PRAGMA page_size").fetchone()[0]
+        checkpoint = db.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+        assert page_size == (4096 if existing else 65536)
+        assert 0 <= 4096000 - checkpoint * page_size < page_size
+        if existing:
+            assert db.execute("SELECT kept FROM extra").fetchone() == (7,)
+    finally:
+        store.close()
+
+
+def test_bulk_metadata_reads_the_same_committed_snapshot_as_single_lookups(storage):
+    uids = [f"owner.{i}" for i in range(505)]
+    arrays = {
+        uid: np.zeros((i % 7 + 1, i % 11 + 2), dtype="int16" if i % 2 else "float64")
+        for i, uid in enumerate([*uids, "outside"])
+    }
+    with storage:
+        for uid, values in arrays.items():
+            storage.set_field(uid, "weights", values, table="parameters")
+        storage.set_field(uids[-1], "score", 7, table="parameters")
+        storage.set_field(uids[0], "other", 9, table="other_table")
+        assert (
+            storage.field_metadata_for({uids[0]: ["weights"]}, table="parameters") == {}
+        )
+    required = {uid: ["weights", "absent"] for uid in uids}
+    observed = storage.field_metadata_for(required, table="parameters")
+    assert set(observed) == {(uid, "weights") for uid in uids}
+    for uid in uids:
+        metadata = observed[uid, "weights"]
+        assert metadata == storage.get_field_metadata(
+            uid, "weights", table="parameters"
+        )
+        assert tuple(metadata["shape"]) == arrays[uid].shape
+        assert np.dtype(metadata["dtype"]) == arrays[uid].dtype
+    fields = storage.fields_by_owner(uids, table="parameters")
+    assert fields == {uid: ["weights"] for uid in uids[:-1]} | {
+        uids[-1]: ["score", "weights"]
+    }
+
+
+@pytest.mark.parametrize("operation", ["metadata", "fields"])
+def test_bulk_reader_does_not_mix_revisions_across_query_pages(
+    storage, db_path, monkeypatch, operation
+):
+    from contextlib import closing, contextmanager
+
+    owners = [f"p{i}" for i in range(505)]
+    with storage:
+        for uid in owners:
+            storage.set_field(uid, "w", np.ones(2), table="parameters")
+    queries = 0
+    acquire = storage._read_pool.acquire
+
+    def change_between_reads(sql):
+        nonlocal queries
+        if sql.startswith("SELECT obj_uid"):
+            queries += 1
+            if queries == 2:
+                with closing(sqlite3.connect(db_path)) as writer, writer:
+                    writer.execute(
+                        "UPDATE storage SET field='replacement' WHERE field='w'"
+                    )
+
+    @contextmanager
+    def traced():
+        with acquire() as connection:
+            connection.set_trace_callback(change_between_reads)
+            try:
+                yield connection
+            finally:
+                connection.set_trace_callback(None)
+
+    monkeypatch.setattr(storage._read_pool, "acquire", traced)
+    if operation == "fields":
+        assert storage.fields_by_owner(owners, table="parameters") == {
+            uid: ["w"] for uid in owners
+        }
+    else:
+        metadata = storage.field_metadata_for(
+            {uid: ["w"] for uid in owners}, table="parameters"
+        )
+        assert {(uid, "w") for uid in owners} == metadata.keys()
+    assert queries == 2
+    with closing(sqlite3.connect(db_path)) as reader:
+        assert reader.execute(
+            "SELECT count(*) FROM storage WHERE field='replacement'"
+        ).fetchone() == (505,)

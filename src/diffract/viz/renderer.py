@@ -25,7 +25,11 @@ from typing import (
 )
 
 from diffract.core.utils import imports as import_utils
-from diffract.viz.styling.sources import StyleLiteralKind, is_style_literal
+from diffract.viz.styling.sources import (
+    StyleLiteralKind,
+    coerce_style_source,
+    is_style_literal,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     import plotly.graph_objects as go  # type: ignore[import-not-found]
@@ -171,10 +175,7 @@ def _coerce_field_refs(value: Any) -> None:
             annotation = type_hints.get(f.name, f.type)
             literal_kind = _style_literal_kind(annotation)
             if isinstance(item, str) and literal_kind is not None:
-                if not _is_style_literal(item, literal_kind):
-                    from diffract.viz.data import FieldRef
-
-                    setattr(value, f.name, FieldRef(field=item))
+                setattr(value, f.name, coerce_style_source(item, literal_kind))
                 continue
             if isinstance(item, str) and _should_coerce_string_to_field_ref(annotation):
                 from diffract.viz.data import FieldRef

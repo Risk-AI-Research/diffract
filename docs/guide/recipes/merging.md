@@ -47,13 +47,18 @@ Here `frob_norm` values from `session1` are available in `session2`, while
 `stable_rank` is not — it is absent from subsequent exports. With
 `fields=None` (the default), all computed fields are merged.
 
+Aggregates travel with their parameter members. When the destination already
+contains a matching parameter coordinate, the merged aggregate uses that
+parameter's destination UID. A filtered source contributes an aggregate only
+when the filter includes all of its members.
+
 ## Options
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `fields` | `None` | Computed fields to copy; `None` copies all |
-| `verify` | `True` | Check for conflicts and skip duplicate fields |
-| `read_budget_bytes` | 512 MiB | Maximum bytes read from the source per chunk |
+| Argument            | Default | Description                                   |
+| ------------------- | ------- | --------------------------------------------- |
+| `fields`            | `None`  | Computed fields to copy; `None` copies all    |
+| `verify`            | `True`  | Check for conflicts and skip duplicate fields |
+| `read_budget_bytes` | 512 MiB | Maximum bytes read from the source per chunk  |
 
 Merging works across storage backends: for example, merge a RAM session into a
 persistent SQLite session to keep the results.

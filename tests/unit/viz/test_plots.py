@@ -7,6 +7,54 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("plot_kind", "field"), [("box", "stable_rank"), ("violin", "weights_svals")]
+)
+def test_jitter_adds_one_overlay_per_category(mock_session, plot_kind, field):
+    from diffract.viz.data import FieldRef
+    from diffract.viz.plots.boxplot import BoxPlot
+    from diffract.viz.plots.violin import ViolinPlot
+
+    plot_type = BoxPlot if plot_kind == "box" else ViolinPlot
+    plot = plot_type(y=FieldRef(field), x=FieldRef("model_id"), jitter_enabled=True)
+    figure = plot.render(mock_session)
+
+    assert [
+        trace.meta["trace_id"] for trace in figure.data if trace.type == "scatter"
+    ] == [
+        f"{plot_kind}_model_a_jitter",
+        f"{plot_kind}_model_b_jitter",
+    ]
+
+
+@pytest.mark.parametrize("plot_kind", ["box", "violin"])
+def test_jitter_coloraxis_options_reach_the_figure(mock_session, plot_kind):
+    from diffract.session.namespaces.viz import VizNamespace
+    from diffract.viz.data import FieldRef
+
+    draw = getattr(VizNamespace(mock_session), plot_kind)
+    figure = draw(
+        x="model_id",
+        y="stable_rank",
+        jitter_enabled=True,
+        jitter_color=FieldRef("frob_norm"),
+        jitter_coloraxis_id=1,
+        jitter_coloraxis_override=True,
+        jitter_cmin=0.0,
+        jitter_cmax=20.0,
+        jitter_colorbar_title="Frobenius norm",
+        jitter_showscale=False,
+    )
+
+    axis = figure.layout.coloraxis
+    assert (axis.cmin, axis.cmax) == (0.0, 20.0)
+    assert axis.colorbar.title.text == "Frobenius norm"
+    assert axis.showscale is False
+    assert [
+        trace.marker.coloraxis for trace in figure.data if trace.type == "scatter"
+    ] == ["coloraxis", "coloraxis"]
+
+
 class TestBoxPlot:
     def test_render_returns_figure(self, mock_session):
         from diffract.viz.data import FieldRef
@@ -397,6 +445,17 @@ class TestSparkline:
 
 
 class TestClusterBarChart:
+    def test_groups_spectra_by_exported_parameter_name(self, mock_session):
+        pytest.importorskip("plotly")
+        from diffract.viz.plots.cluster import ClusterBarChart
+
+        chart = ClusterBarChart(field="weights_svals", group_by=["param_name"])
+        assert {t.name for t in chart.render(mock_session).data} == {
+            "param_name=layer.0.weight",
+            "param_name=layer.0.bias",
+            "param_name=layer.1.weight",
+        }
+
     def test_render_returns_figure(self, mock_session):
         from diffract.viz.plots.cluster import ClusterBarChart
 

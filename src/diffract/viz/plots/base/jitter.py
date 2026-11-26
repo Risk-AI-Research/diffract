@@ -278,6 +278,46 @@ class SupportsJitter(Overlay, SupportsColoraxis("jitter")):
         elif resolved_color.color is not None:
             trace_data["jitter_color"] = resolved_color.color
 
+    @staticmethod
+    def _pick_category_color(
+        x_values: list[Any],
+        y_values: list[Any],
+        category: str,
+        resolved_color: ResolvedColor,
+    ) -> ResolvedColor:
+        """Align numeric colors with the observations drawn for a category."""
+        if resolved_color.values is not None:
+            colors = []
+            for label, y, color in zip(
+                x_values, y_values, resolved_color.values, strict=False
+            ):
+                if str(label) != category or y is None:
+                    continue
+                count = y.size if isinstance(y, np.ndarray) else 1
+                if isinstance(color, np.ndarray):
+                    if color.size != count:
+                        raise ValueError(
+                            "Color and y fields have different observation counts "
+                            f"in {category!r}."
+                        )
+                    colors.extend(color.ravel().tolist())
+                else:
+                    colors.extend([color] * count)
+            return ResolvedColor(values=colors)
+        if isinstance(resolved_color.color, list):
+            color = next(
+                (
+                    color
+                    for label, color in zip(
+                        x_values, resolved_color.color, strict=False
+                    )
+                    if str(label) == category
+                ),
+                None,
+            )
+            return ResolvedColor(color=color)
+        return resolved_color
+
 
 # --- Private helpers ----------------------------------------------------------
 

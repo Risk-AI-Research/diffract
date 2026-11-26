@@ -23,14 +23,14 @@ class ListFormatter(IResultFormatter):
         self,
         param_results: ResultData,
         aggregate_results: AggregateData,
-        _fields: tuple[str, ...],
+        fields: tuple[str, ...],  # noqa: ARG002 - formatter interface
     ) -> StructuredExportResult[list[dict]]:
         """Return results as lists of records.
 
         Args:
             param_results: Parameter results dictionary with scalar fields.
             aggregate_results: Aggregate results list with contextual fields.
-            _fields: Field names (unused for list format).
+            fields: Field names (unused for list format).
 
         Returns:
             StructuredExportResult with scalars list and aggregates list.

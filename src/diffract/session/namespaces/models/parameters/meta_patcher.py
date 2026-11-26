@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from tqdm.auto import tqdm
@@ -11,12 +10,10 @@ from tqdm.auto import tqdm
 from diffract.core.constants import (
     PROGRESS_BAR_DELAY_SEC,
     PROGRESS_BAR_MIN_ITEMS,
-    TABLE_PARAMETERS,
 )
 
 if TYPE_CHECKING:
-    from diffract.core.data.nn.params.interface import IParameterView
-    from diffract.core.data.nn.params.proxy import ParameterDataProxy
+    from diffract.core.data.nn.params.interface import IParameterProxy, IParameterView
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +25,7 @@ class MetadataPatchError(Exception):
 
 
 class MetadataPatcher:
-    """Utility for patching parameter metadata.
-
-    Handles conflict detection and applies updates to the other_meta
-    portion of parameter metadata.
-
-    Example:
-        >>> patcher = MetadataPatcher()
-        >>> patcher.patch(
-        ...     updates={"uid1": {"dataset": "imagenet", "epoch": 10}},
-        ...     parameters=session._get_view(),
-        ...     force=False,
-        ... )
-    """
+    """Validate metadata updates before applying them to parameter records."""
 
     def patch(
         self,
@@ -91,9 +76,9 @@ class MetadataPatcher:
         self,
         updates: dict[str, dict[str, Any]],
         parameters: IParameterView,
-    ) -> tuple[dict[str, ParameterDataProxy], list[str]]:
+    ) -> tuple[dict[str, IParameterProxy], list[str]]:
         """Resolve parameter proxies from UIDs."""
-        resolved: dict[str, ParameterDataProxy] = {}
+        resolved: dict[str, IParameterProxy] = {}
         unknown_uids: list[str] = []
 
         for uid in updates:
@@ -107,7 +92,7 @@ class MetadataPatcher:
     def _validate_conflicts(
         self,
         updates: dict[str, dict[str, Any]],
-        resolved: dict[str, ParameterDataProxy],
+        resolved: dict[str, IParameterProxy],
         force: bool,
     ) -> list[tuple[str, str]]:
         """Check for conflicting metadata keys."""
@@ -126,7 +111,7 @@ class MetadataPatcher:
     def _apply_updates(
         self,
         updates: dict[str, dict[str, Any]],
-        resolved: dict[str, ParameterDataProxy],
+        resolved: dict[str, IParameterProxy],
         parameters: IParameterView,
     ) -> None:
         """Apply metadata updates to parameters.
@@ -134,9 +119,7 @@ class MetadataPatcher:
         Updates other_meta in both the proxy and the metadata index.
         """
         total = len(updates)
-        repository = parameters._repository
-
-        with repository:
+        with parameters:
             for uid, meta_map in tqdm(
                 updates.items(),
                 desc="Updating metadata...",
@@ -144,24 +127,4 @@ class MetadataPatcher:
                 disable=total < PROGRESS_BAR_MIN_ITEMS,
                 total=total,
             ):
-                param = resolved[uid]
-                old_meta = param.meta
-
-                # Build updated other_meta
-                new_other_meta = dict(old_meta.other_meta)
-                new_other_meta.update(meta_map)
-
-                # Create new metadata with updated other_meta
-                new_meta = replace(old_meta, other_meta=new_other_meta)
-
-                # Update the proxy's meta reference (frozen, so we use
-                # object.__setattr__)
-                object.__setattr__(param, "meta", new_meta)
-
-                new_meta_dict = new_meta.to_dict()
-                new_meta_dict.pop("uid")
-                repository.metadata_index.upsert(
-                    TABLE_PARAMETERS,
-                    uid=uid,
-                    **new_meta_dict,
-                )
+                resolved[uid].update_other_meta(meta_map)

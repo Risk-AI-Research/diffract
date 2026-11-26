@@ -18,7 +18,7 @@ import numpy as np
 from .interface import DEFAULT_TABLE, UID, IStorageManager
 
 
-class HybridStorageManager(IStorageManager):
+class HybridStorageManager[Store: IStorageManager](IStorageManager):
     """Storage manager that routes data between light and heavy backends.
 
     Small values and metadata go to light storage for fast random access. Large
@@ -48,8 +48,8 @@ class HybridStorageManager(IStorageManager):
 
     def __init__(
         self,
-        light_storage: IStorageManager,
-        heavy_storage: IStorageManager,
+        light_storage: Store,
+        heavy_storage: Store,
         array_threshold: int = 128 * 1024 * 1024,
     ) -> None:
         """Initialize hybrid storage manager.
@@ -63,7 +63,7 @@ class HybridStorageManager(IStorageManager):
         self.heavy = heavy_storage
         self.array_threshold = array_threshold
 
-    def _should_use_heavy(self, value: Any) -> bool:
+    def uses_heavy_store(self, value: Any) -> bool:
         """Determine if value should be stored in heavy storage."""
         if isinstance(value, np.ndarray):
             return value.nbytes >= self.array_threshold
@@ -97,7 +97,7 @@ class HybridStorageManager(IStorageManager):
         Smaller values go directly to light storage. If a field moves between
         backends, the old copy is erased.
         """
-        if self._should_use_heavy(value):
+        if self.uses_heavy_store(value):
             self.light.set_field(obj_uid, field_name, self._HEAVY_SENTINEL, table=table)
             self.heavy.set_field(obj_uid, field_name, value, table=table)
         else:
@@ -117,7 +117,7 @@ class HybridStorageManager(IStorageManager):
         self.heavy.erase_obj(obj_uid, table=table)
 
     def list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]:
         """List all fields for an object."""
         return self.light.list_fields(obj_uid, table=table)
@@ -187,10 +187,11 @@ class HybridStorageManager(IStorageManager):
 
     def __enter__(self) -> Self:
         """Enter batch context for both backends."""
-        if hasattr(self.light, "__enter__"):
-            self.light.__enter__()
-        if hasattr(self.heavy, "__enter__"):
-            self.heavy.__enter__()
+        with contextlib.ExitStack() as entered:
+            for manager in (self.light, self.heavy):
+                if hasattr(manager, "__enter__"):
+                    entered.enter_context(manager)
+            entered.pop_all()
         return self
 
     def __exit__(

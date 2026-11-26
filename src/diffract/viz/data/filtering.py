@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from .extraction import get_field_value
+from .extraction import matching_fields
 from .types import Entry, EntryContext
 
 
@@ -27,8 +27,10 @@ def _entry_passes_filter(
     """Check if an entry passes all filter conditions."""
     ctx = EntryContext.from_entry(entry)
     for field_name, (op, threshold) in value_filter.items():
-        value = get_field_value(ctx, field_name)
-        if not _check_condition(value, op, threshold):
+        candidates = matching_fields(ctx, field_name)
+        if not any(
+            _check_condition(value, op, threshold) for _, _, value in candidates
+        ):
             return False
     return True
 

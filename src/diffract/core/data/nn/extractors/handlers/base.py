@@ -51,9 +51,7 @@ class ParameterHandler[T](ABC):
         """Return processed weights as a NumPy array."""
         raise NotImplementedError
 
-    def get_additional_metadata(
-        self, _parameter: T, _param_name: str
-    ) -> dict[str, Any]:
+    def get_additional_metadata(self, parameter: T, param_name: str) -> dict[str, Any]:
         """Return optional metadata; never raises and returns empty on failure."""
         return {}
 

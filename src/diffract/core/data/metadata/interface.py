@@ -8,7 +8,19 @@ contract for structured metadata storage and querying.
 from __future__ import annotations
 
 import types
-from typing import Any, Protocol, Self, runtime_checkable
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, Self, runtime_checkable
+
+
+@dataclass(frozen=True)
+class JoinSpec:
+    """Match a base column to a column in one related table."""
+
+    table: str
+    left_column: str
+    right_column: str
+    alias: str = "j"
 
 
 @runtime_checkable
@@ -19,8 +31,8 @@ class IMetadataIndex(Protocol):
     SQL-like querying capabilities. All implementations must support
     table definition, CRUD operations, and flexible querying.
 
-    The index is organized as tables containing records identified by UID,
-    where each record has typed columns for efficient querying.
+    The row methods operate on physical columns and composite keys. UID-based
+    methods also expose the extra fields stored in a legacy row.
     """
 
     def __enter__(self) -> Self:
@@ -63,7 +75,7 @@ class IMetadataIndex(Protocol):
             **fields: Column values to insert.
 
         Raises:
-            ValueError: If record with uid already exists.
+            UniqueConstraintError: If the UID is already present.
         """
         ...
 
@@ -75,8 +87,6 @@ class IMetadataIndex(Protocol):
             uid: Unique identifier of the record to update.
             **fields: Column values to update.
 
-        Raises:
-            KeyError: If record with uid doesn't exist.
         """
         ...
 
@@ -144,6 +154,91 @@ class IMetadataIndex(Protocol):
         Args:
             table: Table name.
             uid: Unique identifier of the record to delete.
+        """
+        ...
+
+    def query_rows(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None = None,
+        where: Mapping[str, Any] | None = None,
+        where_in: Mapping[str, Sequence[Any]] | None = None,
+        order_by: Sequence[str] | None = None,
+        limit: int | None = None,
+        distinct: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Read projected columns from matching rows, including composite keys."""
+        ...
+
+    def query_joined_rows(
+        self,
+        table: str,
+        join: JoinSpec,
+        *,
+        columns: Sequence[str],
+        where: Mapping[str, Any] | None = None,
+        where_in: Mapping[str, Sequence[Any]] | None = None,
+        order_by: Sequence[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read an inner join, keyed by the requested column names.
+
+        Qualify columns and predicates with ``base`` or the alias from the join.
+        """
+        ...
+
+    def insert_rows(
+        self,
+        table: str,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        on_conflict: Literal["raise", "ignore"] = "raise",
+        conflict_target: Sequence[str] | None = None,
+    ) -> int:
+        """Insert rows atomically and return the number inserted.
+
+        Raises:
+            ValueError: If ignoring duplicates without a conflict target, or
+                supplying a target with the default raise policy.
+        """
+        ...
+
+    def update_rows(
+        self,
+        table: str,
+        *,
+        where: Mapping[str, Any],
+        values: Mapping[str, Any],
+        where_null: Sequence[str] = (),
+    ) -> int:
+        """Update the named columns in matching rows and return their count."""
+        ...
+
+    def update_rows_returning(
+        self,
+        table: str,
+        *,
+        where: Mapping[str, Any],
+        where_in: Mapping[str, Sequence[Any]],
+        where_null: Sequence[str],
+        values: Mapping[str, Any],
+        columns: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Update a selection and return columns from each changed row."""
+        ...
+
+    def delete_rows(
+        self,
+        table: str,
+        *,
+        where: Mapping[str, Any] | None = None,
+        where_in: Mapping[str, Sequence[Any]] | None = None,
+    ) -> int:
+        """Delete matching rows and return their count.
+
+        Raises:
+            ValueError: If neither an equality nor a membership predicate is supplied.
         """
         ...
 

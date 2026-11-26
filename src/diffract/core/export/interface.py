@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 if TYPE_CHECKING:
     from diffract.core.data.nn.aggregates.view import AggregateView
     from diffract.core.data.nn.params.interface import IParameterView
+    from diffract.core.parallel import ParallelContext
+    from diffract.session.field_cache import SessionFieldCache
 
 ResultData = dict[str, dict[str, Any]]
 AggregateData = list[dict[str, Any]]
@@ -75,7 +77,8 @@ class IResultFormatter(Protocol):
             fields: Field names requested for export.
 
         Returns:
-            Formatted results in the target format (StructuredExportResult, dict, etc.).
+            A StructuredExportResult for custom formatters. The standalone
+            JSON formatter serializes both result groups into a string.
         """
         ...
 
@@ -86,10 +89,12 @@ class IResultExporter(Protocol):
 
     def export_results(
         self,
-        *fields: tuple[str, ...],
+        *fields: str,
         parameters: IParameterView,
-        aggregates: AggregateView | None,
+        aggregates: AggregateView | None = None,
         formatter: IResultFormatter,
+        parallel: ParallelContext | None = None,
+        field_cache: SessionFieldCache | None = None,
     ) -> Any:
         """Export results from parameters and aggregates using the specified formatter.
 
@@ -98,6 +103,8 @@ class IResultExporter(Protocol):
             parameters: Parameter collection to export scalar fields from.
             aggregates: Aggregate view to export contextual fields from.
             formatter: Formatter to use for output conversion.
+            parallel: Optional context for parallel reads.
+            field_cache: Optional session cache of available fields.
 
         Returns:
             Formatted results from the formatter.

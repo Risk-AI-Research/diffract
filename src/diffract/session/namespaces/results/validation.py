@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING
 
 from diffract.core.compute.execution import KernelApplyLevel
 from diffract.session.errors import KernelNotFoundError
-from diffract.session.resolver import resolve
+from diffract.session.resolver import (
+    FieldAddress,
+    FieldSelector,
+    aggregate_selector,
+    render_label,
+    resolve,
+)
 from diffract.session.utils import did_you_mean
 
 if TYPE_CHECKING:
@@ -29,21 +35,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def found_metric_fields(param_results: ResultData) -> set[str]:
-    """Requested field names that matched at least one in-scope parameter."""
+def _contextual_requests(
+    addresses: tuple[FieldAddress, ...],
+) -> list[tuple[str, FieldSelector]]:
+    return [
+        (a if isinstance(a, str) else render_label(s), s)
+        for a in addresses
+        if (s := resolve(a)).is_contextual
+    ]
+
+
+def found_metric_fields(
+    param_results: ResultData, addresses: tuple[FieldAddress, ...] = ()
+) -> set[str]:
+    """Field requests satisfied by an in-scope parameter or its metadata."""
     found: set[str] = set()
+    constrained = _contextual_requests(addresses)
     for entry in param_results.values():
+        meta = entry["metadata"]
         found.update(entry["fields"])
+        found.update(meta)
+        for display, sel in constrained:
+            if sel.field in entry["fields"] and sel.matches(
+                FieldSelector(
+                    sel.field, (meta["model_id"],), (meta["name"],), (meta["step"],)
+                )
+            ):
+                found.add(display)
     return found
 
 
-def found_aggregate_fields(aggregate_results: AggregateData) -> set[str]:
-    """Requested field names that matched at least one in-scope aggregate."""
-    return {record["field"] for record in aggregate_results}
+def found_aggregate_fields(
+    aggregate_results: AggregateData, addresses: tuple[FieldAddress, ...] = ()
+) -> set[str]:
+    """Field requests satisfied by one of the selected aggregate records."""
+    found = {record["field"] for record in aggregate_results}
+    for display, sel in _contextual_requests(addresses):
+        if any(sel.matches(aggregate_selector(record)) for record in aggregate_results):
+            found.add(display)
+    return found
 
 
 def check_export_fields(
-    requested: tuple[str, ...],
+    requested: tuple[FieldAddress, ...],
     *,
     found: set[str],
     registry: KernelRegistry,
@@ -73,15 +107,19 @@ def check_export_fields(
         KernelNotFoundError: If a requested name is neither producible by a
             registered kernel nor stored in the current scope.
     """
-    missing = [name for name in dict.fromkeys(requested) if name not in found]
+    missing = []
+    for address in requested:
+        selector = resolve(address)
+        name = address if isinstance(address, str) else render_label(selector)
+        if name not in found:
+            missing.append((name, selector.field))
     if not missing:
         return
 
     stored_params = _stored_param_field_names(params(), field_cache)
     stored_aggs = _stored_aggregate_field_names(aggregates())
 
-    for name in missing:
-        base = resolve(name).field
+    for name, base in missing:
         if not searched_aggregates and base in stored_aggs:
             logger.warning(
                 "Requested field '%s' has aggregate values in the current "
@@ -99,6 +137,10 @@ def check_export_fields(
                 name,
                 name,
                 name,
+            )
+        elif base in stored_aggs or base in stored_params:
+            logger.warning(
+                "Requested field '%s' has no values matching this selector.", name
             )
         elif registry.can_produce_field(base):
             _warn_known_field_without_values(

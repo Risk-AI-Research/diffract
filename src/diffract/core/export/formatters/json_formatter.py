@@ -8,6 +8,7 @@ when available, and falls back to string representation otherwise.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from diffract.core.export.interface import (
     AggregateData,
@@ -23,14 +24,14 @@ class JsonFormatter(IResultFormatter):
         self,
         param_results: ResultData,
         aggregate_results: AggregateData,
-        _fields: tuple[str, ...],
+        fields: tuple[str, ...],  # noqa: ARG002 - formatter interface
     ) -> str:
         """Convert results to formatted JSON string.
 
         Args:
             param_results: Parameter results dictionary with scalar fields.
             aggregate_results: Aggregate results list with contextual fields.
-            _fields: Field names (unused for JSON format).
+            fields: Field names (unused for JSON format).
 
         Returns:
             JSON string representation with scalars and aggregates.
@@ -39,20 +40,15 @@ class JsonFormatter(IResultFormatter):
             "scalars": param_results,
             "aggregates": aggregate_results,
         }
-        return json.dumps(combined, indent=2, default=self._json_serializer)
+        return dump_json(combined)
 
-    def _json_serializer(self, obj: object) -> object:
-        """Custom JSON serializer for non-native types.
 
-        Uses tolist() for array-like structures to preserve value structure.
-        Falls back to str() for other objects.
+def dump_json(data: Any) -> str:
+    """Serialize result data and convert array values to nested lists."""
 
-        Args:
-            obj: Object to serialize.
-
-        Returns:
-            JSON-serializable representation of the object.
-        """
+    def json_value(obj: Any) -> object:
         if hasattr(obj, "tolist"):
             return obj.tolist()
         return str(obj)
+
+    return json.dumps(data, indent=2, default=json_value)

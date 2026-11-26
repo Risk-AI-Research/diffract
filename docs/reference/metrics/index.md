@@ -25,9 +25,9 @@ These conventions hold across every metric; the per-category pages assume them.
 
 - **Empirical spectral distribution.** For a weight matrix $W \in
   \mathbb{R}^{m \times n}$ with singular values $\sigma_i$, the ESD eigenvalues
-  are $\lambda_i = \sigma_i^2 / N$, where $N = \max(m, n)$ is `greater_dim`. This
-  is the Heavy-Tailed Self-Regularization convention ($W^\top W / N$ with
-  $Q = N/M \ge 1$) {cite}`martin2021implicit`. The economy SVD yields
+  are $\lambda_i = \sigma_i^2 / N$, where $N = \max(m, n)$ is `greater_dim`. The smaller Gram matrix is $W^\top W/N$
+  for $m\ge n$ and $WW^\top/N$ for $m<n$. This normalization follows the
+  Heavy-Tailed Self-Regularization convention {cite}`martin2021implicit`. The economy SVD yields
   $M = \min(m, n)$ singular values (`lower_dim`), so the ESD has exactly $M$
   eigenvalues, $\lambda_1, \dots, \lambda_M$; a fraction over the whole spectrum
   (such as a concentration) is divided by $M$.
@@ -36,7 +36,7 @@ These conventions hold across every metric; the per-category pages assume them.
   $k$. Every min/max accessor and empirical CDF depends on this.
 - **Aspect ratio.** $Q = N/M \ge 1$ (`aspect_ratio`).
 - **Randomized null.** `weights_rand` is a uniform permutation of the entries of
-  $W$: it preserves the multiset of weights and destroys correlation structure.
+  $W$: it preserves the multiset of weights and randomizes their positions.
   `esd_rand` and the Marchenko-Pastur fit are built from it. The permutation is
   seeded (`seed=42`); `seed=-1` selects a non-deterministic draw.
 - **Apply levels.** `PARAMETER` metrics are per weight matrix; `IN_MODEL`

@@ -50,12 +50,12 @@ else:
         def parameter_type(self) -> ParameterType:  # noqa: D102
             return ParameterType.DENSE
 
-        def can_handle(self, parameter: Any, _param_name: str) -> bool:  # noqa: D102
+        def can_handle(self, parameter: Any, param_name: str) -> bool:  # noqa: D102
             arr = np.asarray(parameter)
             return arr.ndim == self._EXPECTED_NDIM and arr.size > 1
 
         def process(  # noqa: D102
-            self, parameter: Any, _param_name: str
+            self, parameter: Any, param_name: str
         ) -> NDArray[np.floating[Any]]:
             arr = np.asarray(parameter)
             if arr.ndim != self._EXPECTED_NDIM:

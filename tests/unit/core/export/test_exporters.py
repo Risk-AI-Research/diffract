@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,7 @@ import pytest
 from diffract.core.export.exporters import ResultExporter
 from diffract.core.export.formatters.dict_formatter import DictFormatter
 from diffract.core.export.formatters.json_formatter import JsonFormatter
+from diffract.core.export.formatters.list_formatter import ListFormatter
 
 pytestmark = pytest.mark.unit
 
@@ -23,6 +25,8 @@ class _Meta:
     model_id: str
     ptype: Any
     other_meta: dict[str, Any]
+    step: int = 0
+    instance_uid: str = "instance-a"
 
 
 class _PType:
@@ -78,6 +82,11 @@ class _AggMeta:
     field_name: str
     context_models: tuple[str, ...]
     context_params: tuple[str, ...]
+    member_names: tuple[str, ...] = ()
+    member_instances: tuple[str, ...] = ()
+    direction_unknown: bool = False
+    directed: bool = False
+    member_coordinates: tuple[tuple[str, int], ...] = ()
 
 
 class _Aggregate:
@@ -102,6 +111,9 @@ class _AggregateView:
     def __iter__(self):
         return iter(self._aggregates)
 
+    def __getitem__(self, uids: list[str]) -> _AggregateView:
+        return _AggregateView(a for a in self._aggregates if a.meta.uid in uids)
+
     def __bool__(self):
         return bool(self._aggregates)
 
@@ -116,6 +128,25 @@ class _AggregateView:
         parallel: object | None = None,
     ) -> bool:
         return True
+
+
+@pytest.mark.parametrize(
+    "formatter", [DictFormatter(), JsonFormatter(), ListFormatter()]
+)
+def test_formatter_accepts_the_documented_field_keyword(formatter) -> None:
+    parameters = {
+        "uid": {
+            "metadata": {"model_id": "net", "name": "w", "parameter_type": "DENSE"},
+            "fields": {"score": 17},
+        }
+    }
+    result = formatter.format_results(parameters, [], fields=("score",))
+    if isinstance(formatter, JsonFormatter):
+        assert json.loads(result)["scalars"]["uid"]["fields"]["score"] == 17
+    elif isinstance(formatter, DictFormatter):
+        assert result.scalars["uid"]["fields"]["score"] == 17
+    else:
+        assert result.scalars[0]["score"] == 17
 
 
 def test_export_results_requires_fields() -> None:

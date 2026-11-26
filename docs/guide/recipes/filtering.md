@@ -13,12 +13,13 @@ then call them on the returned scope.
 `session.filter()` (and the chained `.filter()` on a scope) accept these keyword
 arguments:
 
-| Filter        | Type                  | Description                                                   |
-| ------------- | --------------------- | ------------------------------------------------------------- |
-| `model_ids`   | `list[str]`           | Filter by model identifier (supports regex with `re:` prefix) |
-| `param_names` | `list[str]`           | Filter by parameter name (supports regex with `re:` prefix)   |
-| `param_types` | `list[ParameterType]` | Filter by parameter type                                      |
-| `param_ids`   | `list[str]`           | Filter by exact parameter UID                                 |
+| Filter        | Type                                        | Description                                                                                           |
+| ------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `model_ids`   | `list[str]`                                 | Filter by model identifier (supports regex with `re:` prefix)                                         |
+| `param_names` | `list[str]`                                 | Filter by parameter name (supports regex with `re:` prefix)                                           |
+| `param_types` | `list[ParameterType]`                       | Filter by parameter type                                                                              |
+| `param_ids`   | `list[str]`                                 | Filter by exact parameter UID                                                                         |
+| `steps`       | integer, `"final"`, or a sequence of either | Select training steps. `session.filter(steps="final")` selects the highest stored step of each model. |
 
 ## Filter by model
 
@@ -40,9 +41,10 @@ with session:
     )
 ```
 
-Scoping to **exactly two models** is also how you run the pairwise cross-model
-metrics (the `l_overlap` / `l_agreement` alignment family): they compare one layer
-between two model versions and raise `ScopeValidationError` on any other scope size.
+Pairwise alignment compares one tensor at two selected model/checkpoint
+coordinates. Select two models at the same step, or select two steps of one
+model. Implicit comparisons require exactly two checkpoints. Pass ordered
+pairs to `compute.apply` to compare selected endpoints in a larger scope.
 See [Apply levels](kernels_and_compute.md#apply-levels) for the pairwise workflow.
 
 ## Filter by parameter name

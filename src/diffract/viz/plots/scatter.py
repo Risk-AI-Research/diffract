@@ -228,6 +228,8 @@ class ScatterPlot(
         if self.title:
             fig.update_layout(title=self.title)
         else:
-            fig.update_layout(title=f"{self.y.field} vs {self.x.field}")
+            fig.update_layout(
+                title=f"{self._field_label(self.y)} vs {self._field_label(self.x)}"
+            )
 
         return fig

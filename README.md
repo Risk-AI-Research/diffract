@@ -24,6 +24,32 @@ dictionaries of NumPy weight matrices.
 
 ## 🚀 Quick Start
 
+The core package accepts a dictionary of named weight matrices.
+
+```python
+import numpy as np
+from diffract import analyze, compare
+
+source = {"encoder": np.diag([4.0, 2.0, 1.0]), "head": np.eye(2)}
+target = {"encoder": np.diag([3.0, 2.0, 1.0]), "head": np.eye(2)}
+
+analysis = analyze(source)
+assert analysis.summary["stable_rank"]["count"] == 2
+
+rows = compare(source, target, fields=("relative_spectrum_change",))
+measurements = {row["aggregate_uid"]: row["value_scalar"] for row in rows}
+assert len(measurements) == 2 and len(rows) == 4
+assert np.isclose(np.mean(list(measurements.values())), 0.5 / np.sqrt(21))
+assert {row["member_role"] for row in rows} == {"source", "target"}
+```
+
+Each matched parameter contributes one measurement per field. The long rows
+identify both members of the pair, which share an `aggregate_uid`.
+
+Pass `export_format="pandas"` for DataFrames with the pandas extra. Use a
+`Session` to choose checkpoints or configure kernels. A
+`Session(profile="local")` keeps results on disk.
+
 Diffract requires Python 3.12 or newer. The core package installs without any deep
 learning framework; heavy dependencies are opt-in extras:
 
@@ -115,8 +141,9 @@ internal structure:
   - **PARAMETER** - Operate on individual weight matrices.
   - **IN_MODEL** - Aggregate within a single model.
   - **CROSS_MODEL** - Compare or aggregate across models. Pairwise comparisons
-    (the alignment/overlap family) compare exactly two models—scope to a pair with
-    `filter(model_ids=[a, b])`.
+    (the alignment/overlap family) compare ordered checkpoints. Use
+    `session.compute.apply("l_overlap", pairs=[(("net", 1000), ("net", 2000))])` to
+    compare two checkpoints of one model.
 
 - **Built-in Visualization**: Publication-ready Plotly plots with theming support.
 
@@ -191,6 +218,22 @@ with attn:
     attn.results.export_metrics("frob_norm")
 ```
 
+Pass numeric training steps to `session.filter` to select checkpoints.
+
+```python
+import numpy as np
+from diffract import Session
+
+trajectory = Session(profile="ram")
+for step in (0, 80, 160):
+    trajectory.models.add({"w": np.diag([step + 1.0, 1.0])}, model_id="net", step=step)
+
+ends = trajectory.filter(model_ids=["net"], steps=[0, 160])
+ends.compute.apply("stable_rank")
+ranks = ends.results.export_metrics("stable_rank", export_format="list")
+assert sorted(row["step"] for row in ranks) == [0, 160]
+```
+
 ### Retrieving Results
 
 Export results in various formats (`pandas`, `polars`, `dict`, `json`, or `list`):
@@ -247,18 +290,17 @@ session.compute.list_available_metrics(verbose=True)
 session.compute.configure_kernel("hard_rank", rtol=1e-6)
 ```
 
-Configuration takes effect when a kernel executes. Fields already stored are reused
-as-is — `apply` skips them by field presence, without comparing stored values to the
-current configuration. To recompute under a new configuration, erase the stored fields
-first:
+The next `apply` checks stored results against the effective configuration and
+their inputs before reusing them. Pass `recompute=True` to force the requested
+kernel even when its stored outputs are fresh.
 
 ```python
-session.results.erase("hard_rank")
-session.compute.apply("hard_rank")  # computes with rtol=1e-6
+session.compute.apply("hard_rank")
+session.results.status("hard_rank")
 ```
 
 See [kernel configuration](https://risk-ai-research.github.io/diffract/guide/recipes/kernels_and_compute.html)
-for the erase-then-apply pattern with multi-output kernels and dependent fields.
+for freshness, force recomputation, and kernel output groups.
 
 ### Session Management
 
@@ -315,6 +357,28 @@ with session:
     ) -> float:
         """Custom analysis combining multiple metrics."""
         return weight * frob_norm + (1 - weight) * stable_rank
+```
+
+Diffract infers input fields from arguments without defaults. Arguments with
+defaults configure the kernel. Use `weights` for the stored weight matrix.
+To compute from a one-dimensional feature, attach the vector to the parameter
+at the relevant checkpoint and run the kernel in that scope.
+
+```python
+initial = trajectory.filter(model_ids=["net"], steps=[0], param_names=["w"])
+(owner,) = initial.models.parameters.list()
+prefix_scores = np.arange(24)
+initial.results.ingest_metrics({owner["uid"]: {"prefix_scores": prefix_scores}})
+
+
+@trajectory.compute.kernel()
+def prefix_mean(prefix_scores):
+    return float(np.mean(prefix_scores))
+
+
+initial.compute.apply("prefix_mean")
+(row,) = initial.results.export_metrics("prefix_mean", export_format="list")
+assert row["prefix_mean"] == 11.5
 ```
 
 ### Available Kernels
@@ -404,6 +468,9 @@ max_workers = 4
 <br>
 
 ## 📚 Documentation
+
+For model instances, numeric checkpoints and the direction of a comparison, see
+[Addressing weights and comparisons](docs/guide/identity.md).
 
 The documentation is hosted at
 [risk-ai-research.github.io/diffract](https://risk-ai-research.github.io/diffract/). It

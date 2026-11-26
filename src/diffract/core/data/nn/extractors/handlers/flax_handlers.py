@@ -59,7 +59,7 @@ else:
             return arr.ndim == self._EXPECTED_NDIM and arr.size > 1
 
         def process(  # noqa: D102
-            self, parameter: Any, _param_name: str
+            self, parameter: Any, param_name: str
         ) -> NDArray[np.floating[Any]]:
             arr = np.asarray(jax.device_get(parameter))
             if arr.ndim != self._EXPECTED_NDIM:

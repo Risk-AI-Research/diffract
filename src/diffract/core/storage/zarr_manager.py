@@ -7,8 +7,10 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 from urllib.parse import quote, unquote, urlparse
+from urllib.request import url2pathname
 
 import numpy as np
 
@@ -23,13 +25,29 @@ from diffract.core.constants import (
 from diffract.core.utils.exceptions import format_exception_message
 
 from .base_manager import BaseStorageManager
-from .interface import DEFAULT_TABLE, UID
+from .interface import DEFAULT_TABLE, UID, IPhysicalStorageManager
+from .keys import is_catalog_owner, physical_parts
 from .metadata import infer_value_metadata
 from .serialization import decode_value, encode_value
 
 _TYPE_NDARRAY = "ndarray"
 
 _READONLY_ERROR = "ZarrStorageManager is readonly; write operation is not allowed"
+
+
+def local_zarr_path(location: str) -> Path | None:
+    """Resolve a filesystem path or local file URI used by a Zarr store."""
+    path = Path(location)
+    if path.drive:
+        return path
+    url = urlparse(location)
+    if not url.scheme:
+        return path
+    if url.scheme != "file":
+        return None
+    if url.netloc not in {"", "localhost"} or url.query or url.fragment:
+        raise ValueError(f"Unsupported local Zarr URI {location!r}")
+    return Path(url2pathname(url.path))
 
 
 class _TableRemovalInfo(NamedTuple):
@@ -62,7 +80,7 @@ if not import_utils.is_available("zarr"):
 else:
     zarr = import_utils.require("zarr")
 
-    class ZarrStorageManager(BaseStorageManager):
+    class ZarrStorageManager(BaseStorageManager, IPhysicalStorageManager):
         """Persistent storage manager using Zarr v3 with fsspec-compatible stores.
 
         Layout:
@@ -100,7 +118,7 @@ else:
             self._lazy_index_sync = lazy_index_sync
             self._max_concurrency = max_concurrency
 
-            self._write_lock = threading.Lock()
+            self._write_lock = threading.RLock()
             self._store: Any | None = None
             self._root_group: Any | None = None
 
@@ -178,15 +196,12 @@ else:
                 )
 
         def _create_store(self) -> Any:
-            parsed = urlparse(self._store_url)
-            scheme = parsed.scheme
-            if scheme in ("", "file"):
+            local_path = local_zarr_path(self._store_url)
+            if local_path is not None:
                 from zarr.storage import LocalStore  # type: ignore[import-untyped]
 
-                local_path = parsed.path if scheme == "file" else self._store_url
                 return LocalStore(local_path)
 
-            import fsspec
             from zarr.storage import FsspecStore  # type: ignore[import-untyped]
 
             fs_kwargs = {
@@ -194,9 +209,9 @@ else:
                 "asynchronous": True,
                 "max_concurrency": self._max_concurrency,
             }
-            fs = fsspec.filesystem(scheme, **fs_kwargs)
-            path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
-            return FsspecStore(fs=fs, path=path)
+            return FsspecStore.from_url(
+                self._store_url, storage_options=fs_kwargs, read_only=self._readonly
+            )
 
         def _get_root(self) -> Any:
             if self._root_group is None:
@@ -431,6 +446,109 @@ else:
                     return True
             return False
 
+        backend_name = "zarr"
+
+        def put_blob(self, key: str, value: Any) -> None:
+            """Write a native array or encoded value at the catalog key."""
+            owner, field = physical_parts(key)
+            if self._readonly:
+                raise OSError(_READONLY_ERROR)
+            root = self._get_root()
+            with self._write_lock:
+                arr, marker = self._serialize_value(
+                    root.require_group(owner), field, value
+                )
+                arr.attrs.update(
+                    {
+                        STORAGE_ATTR_TYPE: marker,
+                        STORAGE_ATTR_META: json.dumps(
+                            infer_value_metadata(value).to_jsonable()
+                        ),
+                    }
+                )
+
+        def read_blob(self, key: str) -> Any:
+            """Load a value at a new or retained legacy node path."""
+            physical_parts(key)
+            return self._decode_array(self._get_root()[key])
+
+        @staticmethod
+        def _decode_array(arr: Any) -> Any:
+            kind = arr.attrs.get(STORAGE_ATTR_TYPE)
+            if kind == _TYPE_NDARRAY:
+                return arr[()]
+            return decode_value(bytes(arr[:]), kind)
+
+        def blob_identity(self, key: str) -> tuple[tuple[int, ...], str, str]:
+            """Inspect a readable node without transferring its chunks."""
+            physical_parts(key)
+            array = self._get_root()[key]
+            tag = array.attrs.get(STORAGE_ATTR_TYPE)
+            if tag not in {"ndarray", "json", "bytes"}:
+                raise ValueError(f"Unsupported Zarr serialization tag {tag!r}")
+            return array.shape, str(array.dtype), tag
+
+        def blob_metadata(self, key: str) -> dict[str, Any] | None:
+            """Read the metadata stored with a physical node."""
+            physical_parts(key)
+            meta = self._get_root()[key].attrs.get(STORAGE_ATTR_META)
+            return json.loads(meta) if meta is not None else None
+
+        def delete_blob(self, key: str) -> None:
+            """Remove a physical array and its chunks."""
+            physical_parts(key)
+            if self._readonly:
+                raise OSError(_READONLY_ERROR)
+            root = self._get_root()
+            with self._write_lock:
+                if key in root:
+                    del root[key]
+
+        def has_catalog_values(self) -> bool:
+            """Check for two-component value paths without reading any payload."""
+            root = self._get_root()
+            return any(
+                next(iter(root[name].array_keys()), None) is not None
+                for name in root.group_keys()
+                if is_catalog_owner(name)
+            )
+
+        def catalog_blob_keys(self) -> set[str]:
+            """List catalog array paths without transferring their chunks."""
+            root = self._get_root()
+            return {
+                f"{owner}/{field}"
+                for owner in root.group_keys()
+                if is_catalog_owner(owner)
+                for field in root[owner].array_keys()
+            }
+
+        def move_blob(self, source: str, target: str) -> None:
+            """Rename a local node directory, moving metadata and chunks together."""
+            physical_parts(source)
+            owner, _ = physical_parts(target)
+            local_path = local_zarr_path(self._store_url)
+            if local_path is None:
+                raise NotImplementedError(
+                    "Remote Zarr values retain their existing catalog key"
+                )
+            if self._readonly:
+                raise OSError(_READONLY_ERROR)
+            root = self._get_root()
+            directory = (local_path / self._root).resolve()
+            src, dst = (directory / source).resolve(), (directory / target).resolve()
+            if not (src.is_relative_to(directory) and dst.is_relative_to(directory)):
+                raise ValueError("Value key is outside the store root")
+            with self._write_lock:
+                if not src.is_dir():
+                    raise KeyError(source)
+                if src == dst:
+                    return
+                if dst.exists():
+                    raise FileExistsError(target)
+                root.require_group(owner)
+                src.rename(dst)
+
         def _has_field(
             self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
         ) -> bool:
@@ -468,12 +586,7 @@ else:
                     msg = f"Field '{field_name}' of '{obj_uid}' not found"
                     raise KeyError(msg)  # noqa: TRY301
 
-                arr = table_group[enc_field][enc_uid]
-                kind = arr.attrs.get(STORAGE_ATTR_TYPE)
-
-                if kind == _TYPE_NDARRAY:
-                    return arr[()]
-                return decode_value(bytes(arr[:]), kind)
+                return self._decode_array(table_group[enc_field][enc_uid])
             except KeyError:
                 raise
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -521,7 +634,7 @@ else:
                 raise OSError(msg) from exc
 
         def _list_fields(
-            self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+            self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
         ) -> list[str]:
             table_group = self._get_table_group(table)
             if table_group is None:
@@ -931,6 +1044,22 @@ else:
                     self._ensure_removal_info(removed_by_table, tbl).removed_fields.add(
                         enc_field
                     )
+
+        def clear_raw_tables(self, protected: set[str]) -> None:
+            """Clear raw field groups and keep direct catalog arrays."""
+            if self._readonly:
+                raise OSError(_READONLY_ERROR)
+            with self._write_lock:
+                root = self._get_root()
+                for table in set(root.group_keys()) - protected:
+                    group = root[table]
+                    for key in tuple(group.group_keys()):
+                        del group[key]
+                    self._index_cache_objs.pop(table, None)
+                    self._index_cache_fields.pop(table, None)
+                    self._index_dirty.pop(table, None)
+                    if not list(group.keys()):
+                        del root[table]
 
         def _clear(self, *, table: str | None = None) -> None:
             if self._readonly:

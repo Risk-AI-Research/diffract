@@ -1,9 +1,10 @@
 # Reference
 
-API documentation generated from docstrings.
+For the coordinate and selector conventions used by the API, see
+[Addressing weights and comparisons](../guide/identity.md).
 
-- **[Session](auto_session.md)** — Main entry point: adding models, computing fields,
-  exporting results
+- **[Python API](auto_session.md)** — `analyze`, `compare`, result and coverage types,
+  field selectors, and session methods
 - **[Configuration](configuration.md)** — Profiles, config files, backend options
 - **[Metrics](metrics/index.md)** — Every spectral metric: generated catalog plus
   per-category formulas

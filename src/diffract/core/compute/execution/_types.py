@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from .aggregation import AggregationContext
 
 
+MAX_RESIDENT_ARGUMENTS = 2048
+
+
 @dataclass(frozen=True, slots=True)
 class AggregateInput:
     """Description of an aggregate input required by an aggregation kernel.
@@ -24,13 +27,11 @@ class AggregateInput:
 
     Attributes:
         field_name: Name of the aggregate field to read.
-        context_models: Model IDs participating in the aggregation.
-        context_params: Parameter names participating in the aggregation.
+        uid: Identity of the stored input for this operand order.
     """
 
     field_name: str
-    context_models: tuple[str, ...]
-    context_params: tuple[str, ...]
+    uid: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,13 +59,11 @@ class PendingGroup:
     information needed to execute the kernel for a specific group.
 
     Attributes:
-        group_id: Unique identifier for this group.
         context: Aggregation context with model/parameter scope.
         view: Parameter view containing the group's parameters.
         required_inputs: Inputs needed to execute the kernel.
     """
 
-    group_id: str
     context: AggregationContext
     view: IParameterView
     required_inputs: RequiredInputs

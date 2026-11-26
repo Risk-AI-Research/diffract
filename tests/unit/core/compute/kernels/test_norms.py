@@ -238,3 +238,13 @@ def test_log_norms_are_nan_when_all_layers_dead() -> None:
         warnings.simplefilter("error")
         assert np.isnan(log_norm((0.0, 0.0)))
         assert np.isnan(log_prod_frob_norm((0.0, 0.0)))
+
+
+def test_frobenius_norm_at_float64_limits() -> None:
+    from diffract.core.compute.kernels.norms import frob_norm
+
+    smallest = np.nextafter(0.0, 1.0)
+    assert frob_norm(np.array([3 * smallest, 4 * smallest])) == 5 * smallest
+    assert frob_norm(np.full(2, np.finfo(np.float64).max)) == np.inf
+    assert frob_norm(np.array([2.0, np.inf])) == np.inf
+    assert np.isnan(frob_norm(np.array([np.inf, np.nan])))

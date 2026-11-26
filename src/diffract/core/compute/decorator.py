@@ -16,6 +16,9 @@ from .registry import KernelRegistry
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .config import OutputComparison
+    from .metadata import ExecutionBinding
+
 # Registration manifest for the built-in kernels. Import side effects only
 # run once per process, but each fresh registry still needs the built-ins;
 # register_default_kernels replays this manifest into the target registry.
@@ -36,6 +39,11 @@ def kernel(
     | None = KernelExecutionProtocol.SEQUENTIAL,
     restrictions: KernelRestrictions | None = None,
     info: KernelInfo | None = None,
+    symmetric: bool | None = None,
+    version: str = "1",
+    output_comparison: OutputComparison | None = None,
+    stream_inputs: bool = False,
+    bind_execution: ExecutionBinding | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a function as a compute kernel.
 
@@ -53,6 +61,12 @@ def kernel(
         execution_protocol: Execution strategy for the kernel.
         restrictions: Optional argument restrictions.
         info: Optional documentation metadata.
+        symmetric: For pair kernels, whether swapping operands preserves the result.
+            None selects ordinary group aggregation.
+        version: Change when the kernel behavior or an existing default changes.
+        output_comparison: Optional output equivalence and array comparison budget.
+        bind_execution: Resolve runtime settings and the callable for traced execution.
+        stream_inputs: Load arguments on demand for a sequential parameter kernel.
 
     Returns:
         Decorator function or decorated function.
@@ -84,6 +98,12 @@ def kernel(
             "restrictions": restrictions,
             "config": cfg,
             "info": info or KernelInfo(),
+            "symmetric": symmetric,
+            "version": version,
+            "output_comparison": output_comparison,
+            "stream_inputs": stream_inputs,
+            "bind_execution": bind_execution,
+            "builtin": _COLLECTING_DEFAULTS,
         }
         registry.register_kernel(**spec)
         if _COLLECTING_DEFAULTS:

@@ -18,8 +18,8 @@ from diffract.core.compute.execution.utils import (
     unmarshal_kernel,
 )
 from diffract.core.compute.registry import KernelRegistry
+from diffract.core.data.metadata.sqlite_index import SQLiteMetadataIndex
 from diffract.core.data.nn.aggregates.repository import AggregateRepository
-from diffract.core.data.nn.params.interface import IParameterView
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository
@@ -124,169 +124,33 @@ class InMemoryCache:
         self._data.setdefault(obj_uid, {})[field_name] = value
 
 
-class InMemoryMetadataIndex:
-    """Simple in-memory metadata index for test doubles."""
-
-    def __init__(self) -> None:
-        self._tables: dict[str, dict[str, dict[str, Any]]] = {}
-        self._schemas: dict[str, dict[str, type]] = {}
-
-    def __enter__(self) -> "InMemoryMetadataIndex":
-        return self
-
-    def __exit__(self, _exc_type: object, _exc_val: object, _exc_tb: object) -> None:
-        return None
-
-    def define_table(
-        self,
-        table: str,
-        columns: dict[str, type],
-        indexes: list[str] | None = None,
-    ) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._schemas[table] = columns
-
-    def insert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._tables[table][uid] = {"uid": uid, **fields}
-
-    def update(self, table: str, uid: str, **fields: Any) -> None:
-        if table in self._tables and uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-
-    def upsert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        if uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-        else:
-            self._tables[table][uid] = {"uid": uid, **fields}
-
-    def get(self, table: str, uid: str) -> dict[str, Any] | None:
-        if table not in self._tables:
-            return None
-        return self._tables[table].get(uid)
-
-    def query(
-        self,
-        table: str,
-        where: dict[str, Any] | None = None,
-        where_in: dict[str, list[Any]] | None = None,
-        where_like: dict[str, str] | None = None,
-        order_by: list[str] | None = None,
-        limit: int | None = None,
-    ) -> list[str]:
-        if table not in self._tables:
-            return []
-
-        results = []
-        for uid, record in self._tables[table].items():
-            match = True
-
-            if where:
-                for col, val in where.items():
-                    if record.get(col) != val:
-                        match = False
-                        break
-
-            if match and where_in:
-                for col, vals in where_in.items():
-                    if col == "uid":
-                        if uid not in vals:
-                            match = False
-                            break
-                    elif record.get(col) not in vals:
-                        match = False
-                        break
-
-            if match:
-                results.append(uid)
-
-        if limit is not None:
-            results = results[:limit]
-
-        return results
-
-    def delete(self, table: str, uid: str) -> None:
-        if table in self._tables:
-            self._tables[table].pop(uid, None)
-
-    def count(self, table: str, where: dict[str, Any] | None = None) -> int:
-        if table not in self._tables:
-            return 0
-        if where is None:
-            return len(self._tables[table])
-        return len(self.query(table, where=where))
-
-    def distinct(self, table: str, column: str) -> list[Any]:
-        if table not in self._tables:
-            return []
-        values = set()
-        for record in self._tables[table].values():
-            if column in record:
-                values.add(record[column])
-        return list(values)
-
-    def list_uids(self, table: str) -> list[str]:
-        if table not in self._tables:
-            return []
-        return list(self._tables[table].keys())
-
-    def clear(self, table: str | None = None) -> None:
-        if table is None:
-            self._tables.clear()
-        elif table in self._tables:
-            self._tables[table].clear()
-
-    def connect(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
+@pytest.fixture
+def metadata_index():
+    index = SQLiteMetadataIndex(":memory:")
+    try:
+        yield index
+    finally:
+        index.close()
 
 
-def make_repository() -> ParameterRepository:
-    metadata_index = InMemoryMetadataIndex()
-    return ParameterRepository.initialize(
-        InMemoryStorage(), metadata_index, InMemoryCache()
-    )
-
-
-def make_aggregate_repository() -> AggregateRepository:
-    metadata_index = InMemoryMetadataIndex()
-    return AggregateRepository.initialize(
-        InMemoryStorage(), metadata_index, InMemoryCache()
-    )
-
-
-def make_params(
-    specs: list[tuple[str, str, dict[str, Any] | None]],
-) -> tuple[ParameterRepository, list[ParameterDataProxy]]:
-    """Create parameters in a single repository (so prefetch works)."""
-    repo = make_repository()
-    storage = repo.storage_manager
-
-    proxies: list[ParameterDataProxy] = []
-    for name, model_id, initial_fields in specs:
-        meta = ParameterMetadata(
-            name=name, ptype=ParameterType.DENSE, model_id=model_id
+@pytest.fixture
+def make_view(metadata_index):
+    def build(specs):
+        repo = ParameterRepository.initialize(
+            InMemoryStorage(), metadata_index, InMemoryCache()
         )
-        proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo)
-        if initial_fields:
-            for k, v in initial_fields.items():
-                storage.set_field(meta.uid, k, v)
-        proxies.append(proxy)
+        proxies = []
+        for name, model_id, fields in specs:
+            meta = ParameterMetadata(
+                name=name, ptype=ParameterType.DENSE, model_id=model_id
+            )
+            proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo)
+            for key, value in (fields or {}).items():
+                repo.storage_manager.set_field(meta.uid, key, value)
+            proxies.append(proxy)
+        return repo.create_view(), proxies
 
-    return repo, proxies
-
-
-def make_view(
-    specs: list[tuple[str, str, dict[str, Any] | None]],
-) -> tuple[IParameterView, list[ParameterDataProxy]]:
-    repo, proxies = make_params(specs)
-    return repo.create_view(), proxies
+    return build
 
 
 # ----------------- fixtures -----------------
@@ -300,8 +164,10 @@ def registry():
 
 
 @pytest.fixture
-def aggregate_repo():
-    return make_aggregate_repository()
+def aggregate_repo(metadata_index):
+    return AggregateRepository.initialize(
+        InMemoryStorage(), metadata_index, InMemoryCache()
+    )
 
 
 @pytest.fixture
@@ -312,7 +178,7 @@ def executor(registry, aggregate_repo):
 # ----------------- parameter-level execution -----------------
 
 
-def test_parameter_level_execute_simple(executor, registry):
+def test_parameter_level_execute_simple(make_view, executor, registry):
     # kernel: double(input) -> out
     def impl(x: int) -> int:
         return x * 2
@@ -342,7 +208,7 @@ def test_parameter_level_execute_simple(executor, registry):
     assert p2.get_field("out") == 10
 
 
-def test_parameter_level_skips_already_computed(executor, registry):
+def test_parameter_level_skips_already_computed(make_view, executor, registry):
     def impl(x: int) -> int:
         return x * 2
 
@@ -369,7 +235,7 @@ def test_parameter_level_skips_already_computed(executor, registry):
 # ----------------- dependencies resolution path -----------------
 
 
-def test_execute_resolves_dependencies(executor, registry):
+def test_execute_resolves_dependencies(make_view, executor, registry):
     # dep: base(x) -> y ; final: plus10(y) -> z
     def base(x: int) -> int:
         return x + 1
@@ -413,7 +279,7 @@ def test_execute_resolves_dependencies(executor, registry):
 # ----------------- aggregation: IN_MODEL -----------------
 
 
-def test_in_model_aggregation(executor, registry, aggregate_repo):
+def test_in_model_aggregation(make_view, executor, registry, aggregate_repo):
     # per-parameter kernel: value -> v
     def value(x: int) -> int:
         return x
@@ -479,7 +345,7 @@ def test_in_model_aggregation(executor, registry, aggregate_repo):
 # ----------------- aggregation: CROSS_MODEL -----------------
 
 
-def test_cross_model_aggregation(executor, registry, aggregate_repo):
+def test_cross_model_aggregation(make_view, executor, registry, aggregate_repo):
     # per-parameter kernel: project -> score
     def score(x: int) -> int:
         return x * 2
@@ -557,7 +423,7 @@ def _register_binary_pair_kernel(registry):
 
 
 def test_binary_cross_model_two_models_writes_and_reports(
-    executor, registry, aggregate_repo
+    make_view, executor, registry, aggregate_repo
 ):
     """A binary cross-model kernel on exactly two models computes, stores the
     hand-computed value, and reports the produced field as written."""
@@ -577,7 +443,7 @@ def test_binary_cross_model_two_models_writes_and_reports(
 
 
 def test_binary_cross_model_three_models_skips_loudly_without_writing(
-    executor, registry, aggregate_repo, caplog
+    make_view, executor, registry, aggregate_repo, caplog
 ):
     """Three models cannot form a pair: the group is skipped (nothing written)
     with a WARNING, never a silent no-op."""
@@ -615,7 +481,7 @@ def test_binary_cross_model_three_models_skips_loudly_without_writing(
 
 
 def test_contextual_field_depends_on_parameter_field(
-    executor, registry, aggregate_repo
+    make_view, executor, registry, aggregate_repo
 ):
     """Test IN_MODEL aggregation produces contextual field from parameter fields."""
 
@@ -669,7 +535,7 @@ def test_contextual_field_depends_on_parameter_field(
 
 
 def test_contextual_field_depends_on_contextual_field(
-    executor, registry, aggregate_repo
+    make_view, executor, registry, aggregate_repo
 ):
     """Test aggregation kernel that depends on another aggregation kernel's output.
 
@@ -752,7 +618,7 @@ def test_contextual_field_depends_on_contextual_field(
     assert agg_norm.get_field("value") == pytest.approx([0.5, 1.0, 1.5])
 
 
-def test_chained_in_model_aggregations(executor, registry, aggregate_repo):
+def test_chained_in_model_aggregations(make_view, executor, registry, aggregate_repo):
     """Test chained IN_MODEL aggregations where second depends on first.
 
     Scenario:
@@ -833,7 +699,9 @@ def test_chained_in_model_aggregations(executor, registry, aggregate_repo):
     assert agg_ratio.get_field("value") == pytest.approx([0.1, 0.2, 0.7])
 
 
-def test_multiple_models_in_model_aggregation(executor, registry, aggregate_repo):
+def test_multiple_models_in_model_aggregation(
+    make_view, executor, registry, aggregate_repo
+):
     """Test IN_MODEL aggregation with multiple models produces separate aggregates."""
 
     def param_value(x: int) -> int:
@@ -896,7 +764,7 @@ def test_multiple_models_in_model_aggregation(executor, registry, aggregate_repo
 # ----------------- prefetch, chunking, and batching -----------------
 
 
-def test_prefetch_success_goes_batch(executor, registry):
+def test_prefetch_success_goes_batch(make_view, executor, registry):
     def impl(a: int) -> int:
         return a + 1
 

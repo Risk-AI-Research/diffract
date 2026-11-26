@@ -48,7 +48,8 @@ class ParametersNamespace:
 
         Returns:
             List of dictionaries containing parameter metadata including
-            UID, name, model ID, type, available fields, and custom metadata.
+            UID, name, model ID, step, and type. Verbose listings also include
+            the step label, available fields, and custom metadata.
         """
         with self.__session_or_context:
             if isinstance(self.__session_or_context, Session):
@@ -62,11 +63,13 @@ class ParametersNamespace:
                         "uid": param.meta.uid,
                         "name": param.meta.name,
                         "model_id": param.meta.model_id,
+                        "step": param.meta.step,
                         "parameter_type": param.meta.ptype.name,
                     }
                     for param in params
                 ]
 
+            labels = self.__param_repo.instances.step_labels()
             cache = self.__session_or_context._field_cache
             if cache.is_valid:
                 # A scoped read may have left the shared cache holding only a
@@ -93,7 +96,11 @@ class ParametersNamespace:
                     "uid": param.meta.uid,
                     "name": param.meta.name,
                     "model_id": param.meta.model_id,
+                    "step": param.meta.step,
                     "parameter_type": param.meta.ptype.name,
+                    "step_label": labels.get(
+                        (param.meta.instance_uid, param.meta.step)
+                    ),
                     "available_fields": fields_by_uid.get(param.meta.uid, []),
                     "other_meta": param.meta.other_meta,
                 }
@@ -137,10 +144,9 @@ class ParametersNamespace:
                     raise SessionError(msg)
 
             param_view = self.__param_repo.create_view()
-            pending = param_view[updates.keys()]
             patcher = MetadataPatcher()
 
             try:
-                patcher.patch(updates=updates, parameters=pending, force=force)
+                patcher.patch(updates=updates, parameters=param_view, force=force)
             except MetadataPatchError as e:
                 raise SessionError(str(e)) from e

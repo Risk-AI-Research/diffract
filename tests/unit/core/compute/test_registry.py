@@ -751,3 +751,107 @@ class TestIntegrationWithoutDI:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def _configured_registry(defaults, *, version="1"):
+    registry = KernelRegistry()
+    registry.register_kernel(
+        name="custom",
+        require_fields=("input",),
+        produce_fields=("result",),
+        implementation=lambda value: value,
+        apply_level=KernelApplyLevel.PARAMETER,
+        execution_protocol=KernelExecutionProtocol.SEQUENTIAL,
+        restrictions=None,
+        config=KernelConfig(**defaults),
+        version=version,
+    )
+    return registry
+
+
+def test_config_identity_is_stable_across_registries_and_added_defaults():
+    defaults = {"alpha": 1.0, "options": {"a": 1, "β": [True, 3.5]}}
+    first = _configured_registry(defaults)
+    second = _configured_registry({**defaults, "enabled": False})
+    first.configure_kernel("custom", KernelConfig(options={"β": [True, 3.5], "a": 2}))
+    second.configure_kernel(
+        "custom", KernelConfig(alpha=1.0, options={"a": 2, "β": [True, 3.5]})
+    )
+
+    actual = first.get_kernel_config_identity("custom")
+    other = second.get_kernel_config_identity("custom")
+    assert actual.hash_scheme == 1
+    assert actual.kernel_version == "1"
+    assert actual.config_hash == (
+        "8fd96aa3341101266287ca80ee0eff8ae834f68b8cef82dc1e9770d705688390"
+    )
+    assert other.config_hash == actual.config_hash
+    assert actual.config_json == r'{"alpha":1.0,"options":{"a":2,"\u03b2":[true,3.5]}}'
+    assert other.config_json == (
+        r'{"alpha":1.0,"enabled":false,"options":{"a":2,"\u03b2":[true,3.5]}}'
+    )
+
+
+def test_config_identity_distinguishes_kernel_revision_and_numeric_types():
+    stable = _configured_registry({"alpha": 1.0})
+    bumped = _configured_registry({"alpha": 1.0}, version="2")
+    original = stable.get_kernel_config_identity("custom")
+    assert (
+        original.config_hash != bumped.get_kernel_config_identity("custom").config_hash
+    )
+    stable.configure_kernel("custom", KernelConfig(alpha=1))
+    changed = stable.get_kernel_config_identity("custom")
+    assert changed.config_json == '{"alpha":1}'
+    assert changed.config_hash != original.config_hash
+
+
+def test_registered_defaults_do_not_follow_runtime_mutation():
+    registry = _configured_registry({"options": [2]})
+    initial = registry.get_kernel_config_identity("custom")
+    registry.get_kernel_config("custom")["options"].append(4)
+    updated = registry.get_kernel_config_identity("custom")
+    assert updated.config_hash != initial.config_hash
+    assert updated.config_json == '{"options":[2,4]}'
+    assert initial.config_json == '{"options":[2]}'
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (float("nan"), "must be finite"),
+        (float("inf"), "must be finite"),
+        ({1: "coerced key"}, "keys must be strings"),
+        ({"\ud800\udc00": True}, "key must contain valid Unicode text"),
+        ("\ud800\udc00", "must contain valid Unicode text"),
+        ((2,), "unsupported type tuple"),
+    ],
+)
+def test_config_identity_rejects_unstable_representations(value, message):
+    registry = _configured_registry({"options": []})
+    registry.configure_kernel("custom", KernelConfig(options=[value]))
+    with pytest.raises(InvalidConfiguration, match=message):
+        registry.get_kernel_config_identity("custom")
+
+
+@pytest.mark.parametrize("dtype", ["float64", "int32"])
+def test_config_identity_rejects_nested_numpy_scalars(dtype):
+    import numpy as np
+
+    registry = _configured_registry({"options": []})
+    registry.configure_kernel(
+        "custom", KernelConfig(options=[{"scale": np.dtype(dtype).type(2)}])
+    )
+    with pytest.raises(
+        InvalidConfiguration,
+        match=rf"configuration\['options'\]\[0\]\['scale'\].*{dtype}",
+    ):
+        registry.get_kernel_config_identity("custom")
+
+
+def test_config_identity_rejects_cycles():
+    registry = _configured_registry({"options": []})
+    recursive = []
+    recursive.append(recursive)
+    registry.configure_kernel("custom", KernelConfig(options=recursive))
+    with pytest.raises(InvalidConfiguration, match="circular reference"):
+        registry.get_kernel_config_identity("custom")

@@ -10,6 +10,7 @@ from typing import Any, Self
 import numpy as np
 import pytest
 
+from diffract.core.data.metadata.sqlite_index import SQLiteMetadataIndex
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository
@@ -194,149 +195,9 @@ class ThreadSafeCache:
         self.set_field(obj_uid, field_name, value)
 
 
-class ThreadSafeMetadataIndex:
-    """Thread-safe fake metadata index for concurrent tests."""
-
-    def __init__(self, latency_s: float = 0.0) -> None:
-        self._tables: dict[str, dict[str, dict[str, Any]]] = {}
-        self._lock = threading.Lock()
-        self._latency_s = latency_s
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        pass
-
-    def define_table(
-        self,
-        table: str,
-        columns: dict[str, type],
-        indexes: list[str] | None = None,
-    ) -> None:
-        with self._lock:
-            if table not in self._tables:
-                self._tables[table] = {}
-
-    def insert(self, table: str, uid: str, **fields: Any) -> None:
-        if self._latency_s > 0:
-            time.sleep(self._latency_s)
-        with self._lock:
-            if table not in self._tables:
-                self._tables[table] = {}
-            self._tables[table][uid] = {"uid": uid, **fields}
-
-    def update(self, table: str, uid: str, **fields: Any) -> None:
-        with self._lock:
-            if table in self._tables and uid in self._tables[table]:
-                self._tables[table][uid].update(fields)
-
-    def upsert(self, table: str, uid: str, **fields: Any) -> None:
-        if self._latency_s > 0:
-            time.sleep(self._latency_s)
-        with self._lock:
-            if table not in self._tables:
-                self._tables[table] = {}
-            if uid in self._tables[table]:
-                self._tables[table][uid].update(fields)
-            else:
-                self._tables[table][uid] = {"uid": uid, **fields}
-
-    def get(self, table: str, uid: str) -> dict[str, Any] | None:
-        if self._latency_s > 0:
-            time.sleep(self._latency_s)
-        with self._lock:
-            if table not in self._tables:
-                return None
-            return self._tables[table].get(uid)
-
-    def query(
-        self,
-        table: str,
-        where: dict[str, Any] | None = None,
-        where_in: dict[str, list[Any]] | None = None,
-        where_like: dict[str, str] | None = None,
-        order_by: list[str] | None = None,
-        limit: int | None = None,
-    ) -> list[str]:
-        with self._lock:
-            if table not in self._tables:
-                return []
-
-            results = []
-            for uid, record in self._tables[table].items():
-                match = True
-
-                if where:
-                    for col, val in where.items():
-                        if record.get(col) != val:
-                            match = False
-                            break
-
-                if match and where_in:
-                    for col, vals in where_in.items():
-                        if col == "uid":
-                            if uid not in vals:
-                                match = False
-                                break
-                        elif record.get(col) not in vals:
-                            match = False
-                            break
-
-                if match:
-                    results.append(uid)
-
-            if limit is not None:
-                results = results[:limit]
-
-            return results
-
-    def delete(self, table: str, uid: str) -> None:
-        with self._lock:
-            if table in self._tables:
-                self._tables[table].pop(uid, None)
-
-    def count(self, table: str, where: dict[str, Any] | None = None) -> int:
-        with self._lock:
-            if table not in self._tables:
-                return 0
-            if where is None:
-                return len(self._tables[table])
-            return len(self.query(table, where=where))
-
-    def distinct(self, table: str, column: str) -> list[Any]:
-        with self._lock:
-            if table not in self._tables:
-                return []
-            values = set()
-            for record in self._tables[table].values():
-                if column in record:
-                    values.add(record[column])
-            return list(values)
-
-    def list_uids(self, table: str) -> list[str]:
-        with self._lock:
-            if table not in self._tables:
-                return []
-            return list(self._tables[table].keys())
-
-    def clear(self, table: str | None = None) -> None:
-        with self._lock:
-            if table is None:
-                self._tables.clear()
-            elif table in self._tables:
-                self._tables[table].clear()
-
-    def connect(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
 @pytest.fixture
 def thread_safe_managers():
-    return ThreadSafeStorage(), ThreadSafeCache(), ThreadSafeMetadataIndex()
+    return ThreadSafeStorage(), ThreadSafeCache(), SQLiteMetadataIndex(":memory:")
 
 
 @pytest.fixture
@@ -345,7 +206,7 @@ def slow_managers():
     return (
         ThreadSafeStorage(latency_s=0.01),
         ThreadSafeCache(latency_s=0.01),
-        ThreadSafeMetadataIndex(latency_s=0.01),
+        SQLiteMetadataIndex(":memory:"),
     )
 
 
@@ -367,7 +228,7 @@ def _create_param(
     model_id: str,
     storage: ThreadSafeStorage,
     cache: ThreadSafeCache,
-    metadata_index: ThreadSafeMetadataIndex,
+    metadata_index: SQLiteMetadataIndex,
     ptype: ParameterType = ParameterType.DENSE,
 ) -> tuple[ParameterDataProxy, ParameterRepository]:
     """Create a parameter and return both the proxy and its repository."""
@@ -684,6 +545,45 @@ class TestIterChunksByReadBudget:
         assert len(chunks) >= 2
         total_params = sum(len(c) for c in chunks)
         assert total_params == 5
+
+    def test_ram_read_budget_and_field_selection_honor_each_owner(self, tmp_path):
+        from contextlib import closing
+
+        from diffract.core.storage.ram_manager import RAMStorageManager
+
+        storage = RAMStorageManager()
+        with closing(SQLiteMetadataIndex(str(tmp_path / "metadata.db"))) as index:
+            index.connect()
+            repo = ParameterRepository.initialize(storage, index)
+            uids = []
+            for i, size in enumerate([4, 6, 10, 11, 1]):
+                p = ParameterDataProxy.create_and_store(
+                    ParameterMetadata(
+                        name=f"p{i}", ptype=ParameterType.DENSE, model_id="m"
+                    ),
+                    repo,
+                )
+                p.set_field("sized", np.zeros(size, dtype=np.uint8))
+                if i in (0, 1):
+                    p.set_field("x", i)
+                if i in (1, 2):
+                    p.set_field("y", i)
+                uids.append(p.meta.uid)
+            view = repo.create_view()
+            assert view.filter_by_fields("x", "y").list_uids() == [uids[1]]
+            assert (
+                view.filter_by_fields("x", "y", inverse_mask=True).list_uids()
+                == uids[3:]
+            )
+            chunks = view.iter_chunks_by_read_budget(
+                budget_bytes=10, required_fields_by_uid={uid: ["sized"] for uid in uids}
+            )
+            assert [block.list_uids() for block in chunks] == [
+                uids[:2],
+                [uids[2]],
+                [uids[3]],
+                [uids[4]],
+            ]
 
     def test_empty_collection(self, thread_safe_managers: tuple) -> None:
         """Empty collection yields nothing."""

@@ -1,8 +1,4 @@
-"""Proxy for aggregate entities.
-
-This module provides the AggregateProxy class for accessing
-aggregated data stored in the aggregates table.
-"""
+"""Storage-backed aggregate data."""
 
 from __future__ import annotations
 
@@ -18,18 +14,9 @@ if TYPE_CHECKING:
     from .repository import AggregateRepository
 
 
-@dataclass(kw_only=True)
-class AggregateProxy(DataProxy[AggregateMetadata]):
-    """Lazy-loading proxy for aggregate data.
-
-    Extends the generic DataProxy with aggregate-specific configuration.
-    Aggregates are stored in the TABLE_AGGREGATES table and represent
-    computed aggregations between models/parameters.
-
-    Attributes:
-        meta: Immutable aggregate metadata.
-        _repository: Repository that owns storage/cache managers.
-    """
+@dataclass(kw_only=True, eq=False)
+class AggregateProxy(DataProxy[AggregateMetadata, "AggregateRepository"]):
+    """Read and write fields for an aggregate through its owning repository."""
 
     meta: AggregateMetadata
     _repository: AggregateRepository = field(repr=False)
@@ -45,13 +32,11 @@ class AggregateProxy(DataProxy[AggregateMetadata]):
         meta: AggregateMetadata,
         repository: AggregateRepository,
     ) -> AggregateProxy:
-        """Create aggregate proxy and store metadata in index.
-
-        Args:
-            meta: Aggregate metadata.
-            repository: Repository owning storage, cache, and metadata managers.
-
-        Returns:
-            New aggregate proxy with metadata stored.
-        """
-        return super().create_and_store(meta=meta, repository=repository)
+        """Return the proxy for this context and its ordered member UIDs."""
+        return repository.get_or_create(
+            meta.field_name,
+            meta.context_models,
+            meta.context_params,
+            member_uids=meta.member_uids or None,
+            directed=meta.directed,
+        )

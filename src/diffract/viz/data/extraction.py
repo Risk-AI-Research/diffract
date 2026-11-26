@@ -1,46 +1,94 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
-from diffract.session.resolver import FieldSelector, resolve
+from diffract.session.resolver import FieldAddress, FieldSelector, render_label, resolve
 
 from .detection import detect_field_meta
 from .types import DataShape, DataType, Entry, EntryContext
 
+_NAME_ALIASES = {"param_name", "parameter_name"}
 
-def get_field_value(ctx: EntryContext, field: str) -> Any:
-    """Return the value of a field, resolving contextual field variants.
 
-    Args:
-        ctx: Entry context to look the field up in.
-        field: Field name to resolve.
+class FieldNotFoundError(ValueError):
+    """An entry has no value for a requested plot slot."""
 
-    Returns:
-        The direct field value if present, otherwise the best-matching
-        contextual field value.
 
-    Raises:
-        ValueError: If no matching field is found in the context.
-    """
-    value = ctx.fields.get(field)
-    if value is not None:
-        return value
+def plot_address(field: FieldAddress) -> str | FieldSelector:
+    """Map table coordinates to plot metadata, preserving selector constraints."""
+    if isinstance(field, str) and "@" not in field:
+        return "name" if field in _NAME_ALIASES else field
+    selector = resolve(field)
+    if selector.field in _NAME_ALIASES:
+        if selector.is_contextual:
+            return replace(selector, field="name")
+        if not isinstance(field, str):
+            return "name"
+    return field if isinstance(field, str) else selector
 
+
+def matching_fields(
+    ctx: EntryContext, field: FieldAddress
+) -> list[tuple[FieldSelector, str, Any]]:
+    """Return the selector, label, and value for each matching field in this entry."""
+    field = plot_address(field)
+    if isinstance(field, str) and field in ctx.fields:
+        return [(FieldSelector(field), field, ctx.fields[field])]
     requested = resolve(field)
+    if requested.field in ctx.fields:
+        scalar = FieldSelector(
+            requested.field,
+            (ctx.model_id,),
+            (ctx.parameter_name,),
+            (ctx.fields.get("step", 0),),
+        )
+        if requested.matches(scalar):
+            return [(scalar, requested.field, ctx.fields[requested.field])]
+    if ctx.field_contexts:
+        return [
+            (candidate, label, ctx.fields[label])
+            for label, record in ctx.field_contexts.items()
+            if requested.matches(candidate := FieldSelector.from_context(record))
+        ]
+    return [
+        (candidate, key, value)
+        for key, value in ctx.fields.items()
+        if (candidate := resolve(key)).is_contextual and requested.matches(candidate)
+    ]
 
-    candidates: list[tuple[FieldSelector, str, Any]] = []
-    for key_, value_ in ctx.fields.items():
-        selector = resolve(key_)
-        if selector.is_contextual and _serves(requested, selector):
-            candidates.append((selector, key_, value_))
 
+def get_field_value(ctx: EntryContext, field: FieldAddress) -> Any:
+    """Read one value and require an explicit operand order for directed pairs."""
+    candidates = matching_fields(ctx, field)
     if not candidates:
-        raise ValueError(f"Field {field} not found in entry context")
-
+        raise FieldNotFoundError(f"Field {field} not found in entry context")
+    directions = {
+        (s.roles, s.steps)
+        for s, label, _ in candidates
+        if s.roles and not ctx.field_contexts.get(label, {}).get("symmetric")
+    }
+    if len(directions) > 1:
+        choices = ", ".join(repr(s) for s, _, _ in candidates if s.roles)
+        raise ValueError(
+            f"Ambiguous directed field. Select one ordered pair with {choices}"
+        )
     return _select_best_contextual_field(candidates, ctx=ctx)
 
 
-def get_field_values(entries: dict[str, Entry], field: str) -> list[Any]:
+def field_label(entries: dict[str, Entry], field: FieldAddress) -> str:
+    """Return the current display label for a plot slot."""
+    requested = resolve(field)
+    labels = {
+        label
+        for entry in entries.values()
+        for label, record in entry.get("field_contexts", {}).items()
+        if requested.matches(FieldSelector.from_context(record))
+    }
+    return next(iter(labels)) if len(labels) == 1 else render_label(requested)
+
+
+def get_field_values(entries: dict[str, Entry], field: FieldAddress) -> list[Any]:
     """Return the field value for each entry.
 
     Args:
@@ -60,7 +108,7 @@ def get_field_values(entries: dict[str, Entry], field: str) -> list[Any]:
 
 
 def get_field_data(
-    entries: dict[str, Entry], field: str
+    entries: dict[str, Entry], field: FieldAddress
 ) -> tuple[list[Any], DataType, DataShape]:
     """Return field values along with their detected type and shape.
 
@@ -74,18 +122,6 @@ def get_field_data(
     values = get_field_values(entries, field)
     meta = detect_field_meta(values)
     return values, meta.data_type, meta.data_shape
-
-
-def _serves(requested: FieldSelector, candidate: FieldSelector) -> bool:
-    """True when a stored contextual selector can serve the request.
-
-    Constrained components must match exactly; None is unconstrained.
-    """
-    if candidate.field != requested.field:
-        return False
-    if requested.models is not None and candidate.models != requested.models:
-        return False
-    return requested.params is None or candidate.params == requested.params
 
 
 def _select_best_contextual_field(

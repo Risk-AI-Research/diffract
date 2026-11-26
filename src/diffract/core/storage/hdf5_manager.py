@@ -30,7 +30,8 @@ from diffract.core.constants import (
 from diffract.core.utils.exceptions import format_exception_message
 
 from .base_manager import BaseStorageManager
-from .interface import DEFAULT_TABLE, UID
+from .interface import DEFAULT_TABLE, UID, IPhysicalStorageManager
+from .keys import is_catalog_owner, physical_parts
 from .metadata import infer_value_metadata
 from .serialization import decode_value, encode_value
 
@@ -54,7 +55,7 @@ if not import_utils.is_available("h5py"):
 else:
     h5py = import_utils.require("h5py")
 
-    class HDF5StorageManager(BaseStorageManager):
+    class HDF5StorageManager(BaseStorageManager, IPhysicalStorageManager):
         """Persistent storage manager using an HDF5 file.
 
         Stores NumPy arrays natively and other values through the shared safe
@@ -229,7 +230,7 @@ else:
                 return True
             return self._write_handle.mode != "r+"
 
-        def _open_write_handle(self) -> h5py.File:
+        def _open_write_handle(self, *, swmr: bool = True) -> h5py.File:
             """Open or reopen write handle, closing existing handles first."""
             if self._write_handle is not None:
                 with contextlib.suppress(Exception):
@@ -239,7 +240,7 @@ else:
             self._close_all_read_handles()
 
             self._write_handle = h5py.File(self._path, "a", libver=self._libver)
-            if self._swmr and not self._write_handle.swmr_mode:
+            if swmr and self._swmr and not self._write_handle.swmr_mode:
                 with contextlib.suppress(Exception):
                     self._write_handle.swmr_mode = True
             return self._write_handle
@@ -470,6 +471,122 @@ else:
                 cache.clear()
                 cache.update(uids)
 
+        backend_name = "hdf5"
+
+        def put_blob(self, key: str, value: Any) -> None:
+            """Write a dataset under a two-component catalog key."""
+            owner, field = physical_parts(key)
+            meta = json.dumps(infer_value_metadata(value).to_jsonable())
+            with self._open(write=True) as file:
+                group = file.require_group(f"{self._root}/{owner}")
+                previous = group.get(field)
+                # Keep the old dataset linked until the replacement is encoded.
+                staged = file.create_group(None) if previous is not None else group
+                if isinstance(value, np.ndarray):
+                    self._write_ndarray_dataset(staged, field, value, meta)
+                else:
+                    self._write_generic_dataset(staged, field, value, meta)
+                if previous is not None:
+                    del group[field]
+                    try:
+                        group[field] = staged[field]
+                    except BaseException:
+                        group[field] = previous
+                        raise
+                file.flush()
+
+        def read_blob(self, key: str) -> Any:
+            """Load the dataset at a catalog pointer, including legacy pointers."""
+            physical_parts(key)
+            with self._open(write=False) as file:
+                return self._decode_dataset(file[f"{self._root}/{key}"])
+
+        @staticmethod
+        def _decode_dataset(dataset: h5py.Dataset) -> Any:
+            kind = dataset.attrs.get(STORAGE_ATTR_TYPE, "ndarray")
+            raw = dataset[()]
+            if kind == "ndarray":
+                return raw if raw.shape else raw.item()
+            payload = raw.tobytes() if isinstance(raw, np.ndarray) else bytes(raw)
+            return decode_value(payload, kind)
+
+        def blob_metadata(self, key: str) -> dict[str, Any] | None:
+            """Load the metadata saved with a physical dataset."""
+            physical_parts(key)
+            with self._open(write=False) as file:
+                meta = file[f"{self._root}/{key}"].attrs.get(STORAGE_ATTR_META)
+                return json.loads(meta) if meta is not None else None
+
+        def delete_blob(self, key: str) -> None:
+            """Unlink a physical dataset."""
+            physical_parts(key)
+            with self._open(write=True) as file:
+                path = f"{self._root}/{key}"
+                if path in file:
+                    del file[path]
+                    file.flush()
+
+        def blob_identity(self, key: str) -> tuple[int, tuple[int, ...], str]:
+            """Identify a dataset across a link move within this file."""
+            physical_parts(key)
+            with self._open(write=False) as file:
+                dataset = file[f"{self._root}/{key}"]
+                tag = dataset.attrs.get(STORAGE_ATTR_TYPE, "ndarray")
+                if tag not in {"ndarray", "json", "bytes"}:
+                    raise ValueError(f"Unsupported HDF5 serialization tag {tag!r}")
+                return (
+                    h5py.h5o.get_info(dataset.id).addr,
+                    dataset.shape,
+                    str(dataset.dtype),
+                )
+
+        def has_catalog_values(self) -> bool:
+            """Check for two-component value paths without reading any payload."""
+            with self._open(write=False) as file:
+                root = file.get(self._root)
+                if root is None:
+                    return False
+                for name in root:
+                    if is_catalog_owner(name):
+                        group = root[name]
+                        if isinstance(group, h5py.Group) and any(
+                            group.get(key, getclass=True) is h5py.Dataset
+                            for key in group
+                        ):
+                            return True
+                return False
+
+        def catalog_blob_keys(self) -> set[str]:
+            """List catalog dataset paths without transferring their contents."""
+            with self._open(write=False) as file:
+                root = file.get(self._root)
+                if root is None:
+                    return set()
+                return {
+                    f"{owner}/{field}"
+                    for owner in root
+                    if is_catalog_owner(owner)
+                    and isinstance(group := root[owner], h5py.Group)
+                    for field in group
+                    if group.get(field, getclass=True) is h5py.Dataset
+                }
+
+        def move_blob(self, source: str, target: str) -> None:
+            """Move an HDF5 link within this file without copying its dataset."""
+            physical_parts(source)
+            owner, _ = physical_parts(target)
+            with self._open(write=True) as file:
+                src, dst = f"{self._root}/{source}", f"{self._root}/{target}"
+                if src not in file:
+                    raise KeyError(source)
+                if src == dst:
+                    return
+                if dst in file:
+                    raise FileExistsError(target)
+                file.require_group(f"{self._root}/{owner}")
+                file.move(src, dst)
+                file.flush()
+
         def _has_field(
             self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
         ) -> bool:
@@ -489,19 +606,7 @@ else:
                         msg = f"Field '{field_name}' of '{obj_uid}' not found"
                         raise KeyError(msg)  # noqa: TRY301
 
-                    dataset = f[path]
-                    kind = dataset.attrs.get(STORAGE_ATTR_TYPE, "ndarray")
-                    if kind == "ndarray":
-                        data = dataset[()]
-                        if not data.shape:
-                            data = data.item()
-                        return data
-
-                    raw = dataset[()]
-                    payload = (
-                        raw.tobytes() if isinstance(raw, np.ndarray) else bytes(raw)
-                    )
-                    return decode_value(payload, kind)
+                    return self._decode_dataset(f[path])
 
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 msg = f"Data corruption in '{field_name}/{obj_uid}': {exc}"
@@ -534,7 +639,7 @@ else:
                     return None
 
         def _list_fields(
-            self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+            self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
         ) -> list[str]:
             """List stored field names."""
             with self._open(write=False) as f:
@@ -802,6 +907,26 @@ else:
             finally:
                 for key in done:
                     self._erase_field_for_all_batch.discard(key)
+
+        def clear_raw_tables(self, protected: set[str]) -> None:
+            """Clear three-level raw fields while keeping direct catalog datasets."""
+            if self._readonly:
+                raise OSError("HDF5StorageManager is readonly")
+            # Unlinking groups requires a writer outside HDF5 SWMR mode.
+            with self._write_lock, self._open_write_handle(swmr=False) as file:
+                root = file.get(self._root)
+                if root is None:
+                    return
+                for table in set(root) - protected:
+                    group = root[table]
+                    if not isinstance(group, h5py.Group):
+                        continue
+                    for key in tuple(group):
+                        if isinstance(group[key], h5py.Group):
+                            del group[key]
+                    self._index_caches.pop(table, None)
+                    if not len(group):
+                        del root[table]
 
         def _clear(self, *, table: str | None = None) -> None:
             """Remove data and recreate structure."""

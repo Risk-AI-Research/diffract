@@ -10,7 +10,12 @@ For a weight matrix $W$ with singular values $\sigma_1 \le \dots \le \sigma_k$
 ($k = \min(m, n)$):
 
 - **Frobenius** — $\lVert W\rVert_F = \sqrt{\sum_i \sigma_i^2}$, the Schatten-2
-  norm (`frob_norm`).
+  norm (`frob_norm`). Diffract evaluates the vector norm of the singular values
+  in float64 using the BLAS Euclidean norm. This avoids intermediate
+  overflow or underflow when the final norm is representable. A zero spectrum returns
+  0. A spectrum containing NaN returns NaN. An infinite singular value or a
+  norm above the float64 range returns infinity in the absence of NaN.
+  [SciPy vector norm](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.norm.html)
 - **Nuclear** — $\lVert W\rVert_* = \sum_i \sigma_i$, the Schatten-1 (trace)
   norm (`nuclear_norm`). It is the sum of singular values; it forms a Schatten-norm family with `l2_norm`.
 - **Spectral** — $\lVert W\rVert_2 = \sigma_{\max}$, the induced $L^2$

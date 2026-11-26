@@ -4,7 +4,9 @@ Export computed fields in various formats.
 
 ## Metrics vs. aggregates: which exporter
 
-A field's apply level decides which exporter returns it:
+A field's apply level decides which level-specific exporter returns it.
+Use `session.compute.describe_field("l_overlap")` to inspect the producer,
+dependencies, configuration, and export route.
 
 | Apply level               | Exporter                      |
 | ------------------------- | ----------------------------- |
@@ -12,14 +14,14 @@ A field's apply level decides which exporter returns it:
 | `IN_MODEL`, `CROSS_MODEL` | `results.export_aggregates()` |
 
 `PARAMETER` fields are per-parameter scalars; `IN_MODEL` and `CROSS_MODEL`
-fields are aggregates keyed by their model and parameter context. Each field's
+fields are aggregates keyed by the field name and the UIDs of the participating
+parameters. Exported labels show the current model and parameter names. Each field's
 apply level is listed in the [metric catalog](../../reference/metrics/catalog.md);
 the levels themselves are described under
 [Apply levels](kernels_and_compute.md#apply-levels).
 
-Requesting a field from the wrong exporter returns nothing (with a warning)
-rather than raising, so an unexpectedly empty result usually means the field is
-served by the other exporter.
+When the other exporter holds a field, the warning names the method that
+serves it. A metrics export can still include parameter metadata.
 
 ## Available formats
 
@@ -72,21 +74,46 @@ with session:
     print(df.head().to_string())
 ```
 
-Output:
+Each row carries the parameter UID, model name, instance UID, numeric step,
+optional step label, parameter name and type. Rows sort by model name, numeric
+step and parameter name. Custom metadata columns use the `meta_` prefix.
+A value whose field name matches an identity column or begins with `meta_`
+or `field_` gains a `field_` prefix in a table. For example, a user metric
+named `step` appears in `field_step` alongside the numeric checkpoint.
 
-```
-  parameter_uid  model_id parameter_name parameter_type  meta_in_model_idx meta_torch_dtype meta_original_model_id  frob_norm  stable_rank  effective_rank
-0      b5c80064  my-model            fc1          DENSE                  1    torch.float32               4f0ec9e0   4.690019    11.069382       29.816245
-1      ef6d4a0c  my-model            fc2          DENSE                  2    torch.float32               4f0ec9e0   2.277429     8.742566       15.563562
+## Long export and joining results
+
+Use `shape="long"` to get parameter metrics and aggregates in the same table.
+Every row carries the field name and the `parameter_uid` it refers to.
+An aggregate contributes one row per member, or one row with no parameter UID
+when it has no members. Rows from the same stored value share an
+`aggregate_uid`. Directional rows include source and target model
+names, steps, and the member's role. Symmetric results can display both orders
+with a shared aggregate UID. A `run_id` links the value to its recorded run
+when provenance is available. Use `session.results.describe_run(run_id)` for
+the requested configuration and per-entity arithmetic. See the
+[SVD lookup example](../../reference/metrics/spectral.md#precision-and-execution-records).
+
+```python
+rows = session.results.export(
+    "frob_norm", "l_overlap", shape="long", export_format="polars"
+)
 ```
 
-Each row is one parameter: identity columns (`parameter_uid`, `model_id`,
-`parameter_name`, `parameter_type`), metadata columns prefixed with `meta_`,
-and one column per requested field.
+Floating-point scalars occupy `value_scalar` and signed 64-bit integers occupy
+`value_integer`. Floating-point arrays with elements up to 64 bits are flat
+lists in `value_array` with the original `value_shape` and `value_dtype`.
+Boolean and text fields have separate columns. For other stored values,
+`value_encoding` describes the content of `value_text`.
+
+Long `list` exports are record lists, `dict` exports map columns to lists,
+and `json` serializes the records, using `null` for non-finite numeric values.
+In `dict` format with the level-specific exporters,
+parameter dictionaries are keyed by UID and aggregates are lists of records.
 
 ## Filtering exports
 
-`export_metrics()` itself only takes field names and `export_format`. To export a
+`export_metrics()` itself accepts field names or selectors and `export_format`. To export a
 subset, create a filtered scope with `session.filter(...)` and call
 `export_metrics()` on it. See [Filtering Parameters](filtering.md) for all
 filter options.
@@ -108,13 +135,22 @@ with session:
 
 ## Working with contextual fields
 
-Aggregated kernels produce contextual field names like `metric@models[m1]@params[...]`. When you request the base name, Diffract matches all contextual variants:
+Request a field by name for every matching aggregate in the current scope.
+Use a `FieldSelector` to constrain the members or their operand order.
 
 ```python
-with session:
-    # Matches both "overlap" and "overlap@models[m1,m2]@params[...]"
-    df = session.results.export_aggregates("overlap", export_format="pandas")
+from diffract import FieldSelector
+
+both = FieldSelector("l_overlap", models=("m1", "m2"), params=("w",))
+forward = FieldSelector("l_overlap", roles=("m1", "m2"), steps=(0, 0), params=("w",))
+rows = session.results.export_aggregates(both, export_format="list")
+forward_rows = session.results.export_aggregates(forward, export_format="list")
 ```
+
+The input `l_overlap@models[m1,m2]@params[w]` selects the same rows as
+`both`. A directed comparison records its source and target. A wide export
+displays the current model names and checkpoint labels. Change a checkpoint
+caption with `session.models.set_display_label("m1", 0, "initial")`.
 
 ## Ingesting and erasing results
 
@@ -124,15 +160,18 @@ with session:
   values via a `uid -> {field_name: value}` mapping. Raises on existing fields
   unless `force=True`.
 - `ingest_aggregates(aggregates, force=False)` — store precomputed aggregate
-  values, each identified by `field_name`, `context_models`, and optional
-  `context_params`.
+  values for parameters already in the session. `context_models` and optional
+  `context_params` select the members within the current scope. Add the models
+  before importing their results. If any named model or parameter is missing,
+  the whole batch raises `SessionError` before storing any values. Renaming a
+  model updates the exported labels and preserves the aggregate and its value.
 - `erase(*fields, erase_dependent_also=False, erase_all=False)` — remove
   computed field data while keeping the parameters. Field names are resolved
   through the kernel registry, so `erase()` applies to kernel-produced fields.
-  Erase a multi-output kernel's fields as a group, and stale dependents
-  explicitly (`erase_dependent_also=True`) — see
-  [Configuring kernels](kernels_and_compute.md#configuring-kernels) for why
-  `apply` cannot restore a partially erased produce group.
+  Reapplying a parameter kernel rebuilds its output group on each parameter
+  with a missing output. Pass `erase_dependent_also=True` to clear downstream
+  values before recomputing them.
+  [Configuring kernels](kernels_and_compute.md#configuring-kernels)
 
 ```python
 with session:
