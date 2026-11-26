@@ -123,6 +123,25 @@ class TestRegressionGate:
         assert bench.compare(base, current, threshold=0.05, abs_floor_s=0.0002) == []
 
 
+@pytest.mark.parametrize(
+    ("forward", "both", "failed"),
+    [(1.06, 2.08, "l_overlap_forward"), (1.03, 2.11, "l_overlap_both")],
+)
+def test_pair_gate_checks_each_direction_and_the_full_pair(forward, both, failed):
+    base = _report("cpu", {})
+    base["results"][0]["pair_stages"] = {"single": {"median_s": 1.0}}
+    current = _report("cpu", {})
+    current["results"][0]["pair_stages"] = {
+        "forward": {"median_s": forward},
+        "reverse": {"median_s": 1.04},
+        "both": {"median_s": both},
+    }
+
+    rows = bench.compare_pairs(base, current, threshold=0.05)
+
+    assert [row["stage"] for row in rows if row["regressed"]] == [failed]
+
+
 class TestPeakRSS:
     """RSS sampling backend selection."""
 
@@ -140,6 +159,48 @@ class TestPeakRSS:
         assert tracker.peak_bytes == 0
 
 
+class TestP95:
+    """Nearest-rank 95th percentile; the realistic defect is an off-by-one."""
+
+    def test_hundred_distinct_samples_pick_the_95th(self) -> None:
+        samples = [float(i) for i in range(1, 101)]
+        assert bench._p95(samples) == 95.0
+
+    def test_single_sample_is_its_own_p95(self) -> None:
+        assert bench._p95([0.25]) == 0.25
+
+    def test_order_of_input_does_not_matter(self) -> None:
+        samples = [float(i) for i in range(1, 101)]
+        assert bench._p95(list(reversed(samples))) == bench._p95(samples)
+
+
+class TestStoreSizes:
+    """The on-disk split must find sidecars and exclude the harness config."""
+
+    def test_splits_index_and_value_bytes_with_sidecars(self, tmp_path: Path) -> None:
+        (tmp_path / "metadata.db").write_bytes(b"a" * 10)
+        (tmp_path / "metadata.db-wal").write_bytes(b"b" * 5)
+        (tmp_path / "storage.db").write_bytes(b"c" * 20)
+        (tmp_path / "storage.db-shm").write_bytes(b"d" * 4)
+        blob_dir = tmp_path / "sqlite_blobs"
+        blob_dir.mkdir()
+        (blob_dir / "blob.npy").write_bytes(b"e" * 100)
+        (tmp_path / "bench_local.ini").write_bytes(b"f" * 999)
+
+        sizes = bench._store_sizes(tmp_path)
+
+        assert sizes["metadata_index_bytes"] == 15
+        assert sizes["value_store_bytes"] == 124
+
+    def test_missing_blob_directory_is_not_an_error(self, tmp_path: Path) -> None:
+        (tmp_path / "metadata.db").write_bytes(b"a" * 3)
+        (tmp_path / "storage.db").write_bytes(b"b" * 7)
+
+        sizes = bench._store_sizes(tmp_path)
+
+        assert sizes == {"metadata_index_bytes": 3, "value_store_bytes": 7}
+
+
 class TestEndToEnd:
     """A tiny real run must time every stage on actual pipeline work."""
 
@@ -155,12 +216,23 @@ class TestEndToEnd:
         assert report["environment"]["python"]
         assert report["environment"]["numpy"]
 
+        resolver = report["resolver"]
+        assert resolver["n"] == bench.RESOLVE_ITERS
+        assert 0 < resolver["median_s"] <= resolver["p95_s"]
+
         (result,) = report["results"]
         assert result["profile"] == "ram"
         assert result["shape"]["n_params"] == 2
+        assert result["store"] is None
 
         for stage in bench.STAGES:
             assert result["stages"][stage]["median_s"] >= 0
         # The parameter stage always runs a real SVD; it cannot be a zero no-op.
         assert result["stages"]["apply_parameter"]["median_s"] > 0
+        # The no-op stages re-apply computed fields; a skip that recomputed the
+        # SVD would take the same order as the apply stage itself.
+        assert (
+            result["stages"]["apply_parameter_noop"]["median_s"]
+            < result["stages"]["apply_parameter"]["median_s"]
+        )
         assert result["memory"]["peak_rss_mb"] > 0

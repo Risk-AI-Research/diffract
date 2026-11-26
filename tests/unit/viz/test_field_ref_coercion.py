@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
+from diffract import Session
 from diffract.viz.data import FieldRef
 from diffract.viz.plots.boxplot import BoxPlot
 from diffract.viz.plots.sparkline import SparklinePlot
+from diffract.viz.plots.violin import ViolinPlot
 from diffract.viz.renderer import _coerce_field_refs, _is_style_literal
 from diffract.viz.styling.sources import StyleLiteralKind
 
@@ -95,3 +98,31 @@ def test_typo_field_name_becomes_field_ref() -> None:
     _coerce_field_refs(plot)
     assert isinstance(plot.jitter_color, FieldRef)
     assert plot.jitter_color.field == "layerr_id"
+
+
+def test_wrapper_and_config_style_coercion_on_real_checkpoint_data() -> None:
+    options = {
+        "x": "model_id",
+        "y": "weights_svals",
+        "jitter_enabled": True,
+        "jitter_color": "frob_norm",
+        "jitter_seed": 4,
+        "jitter_coloraxis_id": 1,
+        "jitter_coloraxis_override": True,
+        "jitter_colorbar_title": "Frobenius norm",
+    }
+    with Session(profile="ram") as session:
+        for name, scale in (("a", 2), ("b", 3)):
+            session.models.add({"w": np.diag([1.0, scale, 5.0])}, model_id=name)
+        session.compute.apply("weights_svals", "frob_norm")
+        wrapped = session.viz.violin(**options)
+        configured = ViolinPlot(**options)
+        _coerce_field_refs(configured)
+        direct = configured.render(session)
+
+    for figure in (wrapped, direct):
+        assert figure.layout.coloraxis.colorbar.title.text == "Frobenius norm"
+        jitter = [trace for trace in figure.data if trace.type == "scatter"]
+        assert len(jitter) == 2
+        assert all(len(trace.y) == 3 for trace in jitter)
+        assert all(len(trace.marker.color) == len(trace.y) for trace in jitter)

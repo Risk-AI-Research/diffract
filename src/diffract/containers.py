@@ -190,19 +190,20 @@ class MainContainer(containers.DeclarativeContainer):
     )
 
     # Subsystem containers
+    metadata = providers.Container(
+        MetadataContainer,
+        config=config.metadata,
+    )
+
     storage = providers.Container(
         StorageContainer,
         config=config.storage,
+        metadata_index=metadata.metadata_index_resource,
     )
 
     cache = providers.Container(
         CacheContainer,
         config=config.cache,
-    )
-
-    metadata = providers.Container(
-        MetadataContainer,
-        config=config.metadata,
     )
 
     compute_singleton = providers.Container(ComputeSingletonContainer)
@@ -305,6 +306,28 @@ class WiringConfiguration:
 compute_singleton_container = ComputeSingletonContainer()
 
 
+def resolve_config_paths(resolved: dict, *, base_path: Path | None = None) -> None:
+    """Resolve configured filenames using the same base for sessions and maintenance."""
+    if base_path is None:
+        base_path = Path(__file__).resolve().parents[2]
+    for key in ("path", "filename"):
+        stack: list[dict[str, Any]] = [resolved]
+        while stack:
+            cur = stack.pop()
+            for k, v in list(cur.items()):
+                if isinstance(v, dict):
+                    stack.append(v)
+                    continue
+                if k != key or not isinstance(v, str):
+                    continue
+                value = v.strip().strip('"')
+                if value in _NON_FILESYSTEM_PATH_VALUES:
+                    continue
+                if value.startswith(("ext://", "/", "~")):
+                    continue
+                cur[k] = str(base_path / value)
+
+
 def create_main_container(
     config_path: str | Path | None = None,
     profile: str | None = None,
@@ -327,9 +350,6 @@ def create_main_container(
     container = MainContainer(
         compute_singleton=compute_singleton_container,
     )
-
-    repo_root = Path(__file__).resolve().parents[2]
-    cwd = Path.cwd()
 
     config_loaded = False
 
@@ -364,25 +384,10 @@ def create_main_container(
             container.config.from_dict(_parse_ini_config(default_path))
             logger.debug("Loaded default configuration from %s", default_path)
 
-    # Resolve relative file paths to absolute paths.
-    base_path = cwd if profile is not None else repo_root
     resolved = container.config()
-    for key in ("path", "filename"):
-        stack: list[dict[str, Any]] = [resolved]
-        while stack:
-            cur = stack.pop()
-            for k, v in list(cur.items()):
-                if isinstance(v, dict):
-                    stack.append(v)
-                    continue
-                if k != key or not isinstance(v, str):
-                    continue
-                value = v.strip().strip('"')
-                if value in _NON_FILESYSTEM_PATH_VALUES:
-                    continue
-                if value.startswith(("ext://", "/", "~")):
-                    continue
-                cur[k] = str(base_path / value)
+    resolve_config_paths(
+        resolved, base_path=Path.cwd() if profile is not None else None
+    )
     container.config.from_dict(resolved)
 
     # Configs without a [logging] section get the fallback silently.

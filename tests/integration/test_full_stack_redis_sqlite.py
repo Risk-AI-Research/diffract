@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -13,6 +14,8 @@ from diffract.core.data.nn.params.schema import ParameterType
 
 pytestmark = [pytest.mark.integration, pytest.mark.network]
 
+REDIS_HOST = os.getenv("TEST_REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("TEST_REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))
 
 
@@ -74,37 +77,30 @@ def test_concurrent_reads_with_redis_sqlite(
     redis_cache_manager, sqlite_storage_manager
 ) -> None:
     """Test concurrent reads with Redis cache and SQLite storage."""
-    from .helpers import run_concurrent_operations
-
     cache = redis_cache_manager
     storage = sqlite_storage_manager
 
     # Populate data
     rng = np.random.default_rng(0)
     num_objects = 100
-    for i in range(num_objects):
-        value = {"index": i, "data": rng.standard_normal(10).astype(np.float32)}
+    expected = [
+        {"index": i, "data": rng.standard_normal(10).astype(np.float32).tolist()}
+        for i in range(num_objects)
+    ]
+    for i, value in enumerate(expected):
         storage.set_field(f"obj_{i}", "field", value)
 
-    def read_operation(thread_idx: int) -> dict:
-        obj_idx = thread_idx % num_objects
+    def read_operation(obj_idx: int) -> dict:
         uid = f"obj_{obj_idx}"
-
-        # Try cache first
         if cache.has_field(uid, "field"):
             return cache.get_field(uid, "field")
-
-        # Cache miss, load from storage
         value = storage.get_field(uid, "field")
         cache.set_field(uid, "field", value)
         return value
 
-    results, exceptions = run_concurrent_operations(
-        read_operation, num_threads=10, operations_per_thread=50
-    )
-
-    assert not exceptions, f"Exceptions occurred: {exceptions}"
-    assert len(results) == 500  # 10 threads * 50 operations
+    indices = list(range(num_objects)) * 5
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        assert list(pool.map(read_operation, indices, timeout=30)) == expected * 5
 
 
 def test_batch_operations_redis_sqlite(
@@ -143,7 +139,7 @@ def test_session_merge_with_redis_sqlite(
     from diffract.containers import WiringConfiguration, create_main_container
     from diffract.session import Session
 
-    # Create two sessions with same storage/cache
+    # Use separate SQLite stores and one Redis endpoint
     config_path_a = temp_dir / "config_a.ini"
     config_path_b = temp_dir / "config_b.ini"
 
@@ -165,8 +161,8 @@ path = {temp_dir / f"merge_metadata_{idx}.db"}
 backend = redis
 
 [cache.redis]
-host = localhost
-port = 6379
+host = {REDIS_HOST}
+port = {REDIS_PORT}
 db = {REDIS_DB}
 max_memory_mb = 128
 key_prefix = diffract:test:merge:
@@ -179,44 +175,38 @@ skip_not_implemented_types = true
 """
         config_path.write_text(config_content.strip() + "\n")
 
-    try:
-        container_a = create_main_container(config_path_a)
-        WiringConfiguration.wire(container_a)
-        session_a = Session(container=container_a)
+    container_a = create_main_container(config_path_a)
+    WiringConfiguration.wire(container_a)
+    session_a = Session(container=container_a)
 
-        container_b = create_main_container(config_path_b)
-        WiringConfiguration.wire(container_b)
-        session_b = Session(container=container_b)
+    container_b = create_main_container(config_path_b)
+    WiringConfiguration.wire(container_b)
+    session_b = Session(container=container_b)
 
-        # Add data to session_b
-        container_b.storage.storage_manager()
-        container_b.cache.cache_manager()
+    # Add data to session_b
+    container_b.storage.storage_manager()
+    container_b.cache.cache_manager()
 
-        meta = ParameterMetadata(
-            uid="merge_test",
-            name="test.weight",
-            ptype=ParameterType.DENSE,
-            model_id="m_merge",
-        )
-        weights = np.ones((5, 5), dtype=np.float32)
-        repo_b = container_b.nn.parameter_repository()
-        proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo_b)
-        proxy.set_field("weights", weights)
-        proxy.set_field("test_field", 42)
+    meta = ParameterMetadata(
+        uid="merge_test",
+        name="test.weight",
+        ptype=ParameterType.DENSE,
+        model_id="m_merge",
+    )
+    weights = np.ones((5, 5), dtype=np.float32)
+    repo_b = container_b.nn.parameter_repository()
+    proxy = ParameterDataProxy.create_and_store(meta=meta, repository=repo_b)
+    proxy.set_field("weights", weights)
+    proxy.set_field("test_field", 42)
 
-        # Merge
-        WiringConfiguration.wire(container_a)
-        session_a.utils.merge_other_session(session_b, verify=True)
+    # Merge
+    WiringConfiguration.wire(container_a)
+    session_a.utils.merge_other_session(session_b, verify=True)
 
-        # Verify merge
-        result = session_a.results.export_metrics("test_field", export_format="dict")
-        assert meta.uid in result
-        assert result[meta.uid]["fields"]["test_field"] == 42
-
-    except Exception as e:
-        if "Redis" in str(e) or "redis" in str(e).lower():
-            pytest.skip(f"Redis not available: {e}")
-        raise
+    # Verify merge
+    result = session_a.results.export_metrics("test_field", export_format="dict")
+    assert meta.uid in result
+    assert result[meta.uid]["fields"]["test_field"] == 42
 
 
 def test_large_arrays_sqlite_blobs(redis_cache_manager, sqlite_storage_manager) -> None:

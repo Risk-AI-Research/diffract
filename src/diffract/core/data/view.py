@@ -10,7 +10,7 @@ import logging
 import re
 import types
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Self, TypeVar
+from typing import TYPE_CHECKING, Self, TypeVar, overload
 
 from tqdm.auto import tqdm
 
@@ -21,7 +21,14 @@ from diffract.core.constants import (
 from diffract.core.parallel import ParallelContext, map_maybe_parallel
 from diffract.core.utils.exceptions import format_exception_message
 
-from .interface import EntityIndex, EntityUID, FieldName
+from .interface import (
+    EntityIndex,
+    EntityUID,
+    FieldName,
+    IDataProxy,
+    IDataView,
+    IMetadata,
+)
 
 if TYPE_CHECKING:
     from .interface import IDataRepository
@@ -34,7 +41,7 @@ logger = logging.getLogger(__name__)
 _ERROR_PREVIEW_LIMIT = 10
 
 
-class DataView[TMetadata, TProxy]:
+class DataView[TMetadata: IMetadata, TProxy: IDataProxy](IDataView[TMetadata, TProxy]):
     """Generic view over a subset of entities owned by a repository.
 
     Provides numpy-like view semantics with support for filtering,
@@ -81,6 +88,21 @@ class DataView[TMetadata, TProxy]:
         for uid in self._ensure_uids():
             yield self._repository.get_proxy(uid)
 
+    @overload
+    def __getitem__(self, index: EntityIndex) -> TProxy: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Self: ...
+
+    @overload
+    def __getitem__(self, index: EntityUID) -> TProxy: ...  # type: ignore[overload-overlap]  # str is a scalar UID
+
+    @overload
+    def __getitem__(self, index: Sequence[EntityIndex]) -> Self: ...
+
+    @overload
+    def __getitem__(self, index: Sequence[EntityUID]) -> Self: ...
+
     def __getitem__(
         self,
         index: EntityIndex
@@ -90,6 +112,8 @@ class DataView[TMetadata, TProxy]:
         | Sequence[EntityUID],
     ) -> TProxy | Self:
         """Index into the view by position(s) or uid(s)."""
+        if isinstance(index, str):
+            return self._repository.get_proxy(index)
         if not self._sorted:
             self._sort_in_place()
 
@@ -102,8 +126,6 @@ class DataView[TMetadata, TProxy]:
                     repository=self._repository,
                     uids=uids[index],
                 )
-            case str():
-                return self._repository.get_proxy(index)
             case _:
                 if isinstance(index, Sequence) and index:
                     first = index[0]
@@ -138,6 +160,16 @@ class DataView[TMetadata, TProxy]:
             self._sort_in_place()
         return list(self._ensure_uids())
 
+    def _read_parallelism(
+        self, parallel: ParallelContext | None
+    ) -> ParallelContext | None:
+        if parallel is not None and getattr(
+            self._repository.metadata_index, "in_write_context", False
+        ):
+            # Worker threads cannot see the transaction held by this caller.
+            return None
+        return parallel
+
     def list_fields_by_uid(
         self,
         *,
@@ -151,6 +183,19 @@ class DataView[TMetadata, TProxy]:
         if not uids:
             return {}
 
+        bulk = getattr(type(self._repository.storage_manager), "fields_by_owner", None)
+        if bulk is not None:
+            try:
+                for uid in uids:
+                    self._repository.get_proxy(uid)
+                return bulk(
+                    self._repository.storage_manager, uids, table=self._repository.TABLE
+                )
+            except (KeyError, OSError, RuntimeError):
+                logger.debug(
+                    "Bulk field listing failed; checking each owner", exc_info=True
+                )
+
         def _safe_list_fields(
             uid: EntityUID,
         ) -> tuple[EntityUID, list[FieldName], str | None]:
@@ -162,7 +207,7 @@ class DataView[TMetadata, TProxy]:
         dict_items = map_maybe_parallel(
             uids,
             _safe_list_fields,
-            parallel=parallel,
+            parallel=self._read_parallelism(parallel),
         )
 
         total = len(uids)
@@ -215,6 +260,11 @@ class DataView[TMetadata, TProxy]:
         if fields_by_uid is not None and not fields_by_uid:
             return True
 
+        if self._repository.cache_manager is None and (
+            fields is not None or fields_by_uid.keys() <= set(self._ensure_uids())
+        ):
+            return True
+
         if not self._sorted:
             self._sort_in_place()
 
@@ -243,7 +293,7 @@ class DataView[TMetadata, TProxy]:
         results = map_maybe_parallel(
             list(fields_by_uid.keys()),
             _prefetch_one,
-            parallel=parallel,
+            parallel=self._read_parallelism(parallel),
         )
 
         total = len(fields_by_uid)
@@ -282,6 +332,10 @@ class DataView[TMetadata, TProxy]:
                         return False
 
         return all_success
+
+    def erase_exact_fields(self, *fields: FieldName) -> int:
+        """Remove literal field names and count owners that lost data."""
+        return self._repository.erase_values(self._ensure_uids(), fields)
 
     def erase_fields(self, *fields: FieldName) -> None:
         """Remove specified fields from entities in this view."""
@@ -347,6 +401,26 @@ class DataView[TMetadata, TProxy]:
                 uids=uids if not inverse_mask else [],
             )
 
+        storage = self._repository.storage_manager
+        lookup = getattr(type(storage), "owners_with_fields", None)
+        if lookup is not None and (
+            self._repository.cache_manager is None
+            or getattr(storage, "uses_value_revisions", False) is True
+        ):
+            matches = lookup(
+                storage,
+                uids,
+                need_fields,
+                table=self._repository.TABLE,
+                inverse=inverse_mask,
+            )
+            for uid in uids:
+                self._repository.get_proxy(uid)
+            return self.__class__(
+                repository=self._repository,
+                uids=[uid for uid in uids if uid in matches],
+            )
+
         def _filter(uid: EntityUID) -> EntityUID | None:
             proxy = self._repository.get_proxy(uid)
             for field in need_fields:
@@ -354,7 +428,9 @@ class DataView[TMetadata, TProxy]:
                     return None
             return uid
 
-        filtered_uids = map_maybe_parallel(uids, _filter, parallel=parallel)
+        filtered_uids = map_maybe_parallel(
+            uids, _filter, parallel=self._read_parallelism(parallel)
+        )
 
         total = len(uids)
         out = [

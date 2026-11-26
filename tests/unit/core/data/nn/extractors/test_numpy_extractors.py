@@ -64,7 +64,11 @@ def test_numpy_dict_extractor_skips_unsupported_arrays(
 def test_numpy_dense_handler_accepts_only_2d_float() -> None:
     handler = NumpyDenseHandler()
 
-    assert handler.can_handle(np.ones((3, 3)), "w")
+    weights = np.arange(-3, 3, dtype=float).reshape(2, 3)
+    assert handler.can_handle(parameter=weights, param_name="w")
+    np.testing.assert_array_equal(
+        handler.process(parameter=weights, param_name="w"), weights, strict=True
+    )
     assert handler.can_handle(np.ones((3, 3), dtype=np.float32), "w")
     assert not handler.can_handle(np.ones(3), "w")
     assert not handler.can_handle(np.ones((3, 3), dtype=np.int32), "w")

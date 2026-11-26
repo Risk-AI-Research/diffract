@@ -25,12 +25,21 @@ class AggregateMetadata:
         field_name: Base field name of the computed aggregate (e.g., "l_overlap").
         context_models: Tuple of model IDs participating in this aggregate.
         context_params: Tuple of parameter names participating in this aggregate.
+        member_uids: Persistent identifiers of the participating parameters.
+        member_coordinates: Model names and numeric checkpoints in member order.
+        directed: Whether members carry source and target roles.
     """
 
     uid: str = field(default_factory=get_unique_id)
     field_name: str
     context_models: tuple[str, ...] = ()
     context_params: tuple[str, ...] = ()
+    member_uids: tuple[str, ...] = ()
+    member_coordinates: tuple[tuple[str, int], ...] = ()
+    member_names: tuple[str, ...] = ()
+    member_instances: tuple[str, ...] = ()
+    direction_unknown: bool = False
+    directed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize metadata to dictionary.
@@ -43,6 +52,12 @@ class AggregateMetadata:
             "field_name": self.field_name,
             "context_models": json.dumps(list(self.context_models)),
             "context_params": json.dumps(list(self.context_params)),
+            "member_uids": list(self.member_uids),
+            "member_coordinates": list(self.member_coordinates),
+            "member_names": list(self.member_names),
+            "member_instances": list(self.member_instances),
+            "direction_unknown": self.direction_unknown,
+            "directed": self.directed,
         }
 
     @classmethod
@@ -69,32 +84,12 @@ class AggregateMetadata:
             field_name=data["field_name"],
             context_models=tuple(context_models),
             context_params=tuple(context_params),
+            member_uids=tuple(data.get("member_uids", ())),
+            member_coordinates=tuple(
+                (model, step) for model, step in data.get("member_coordinates", ())
+            ),
+            member_names=tuple(data.get("member_names", ())),
+            member_instances=tuple(data.get("member_instances", ())),
+            direction_unknown=data.get("direction_unknown", False),
+            directed=data.get("directed", False),
         )
-
-    @classmethod
-    def create_uid_from_context(
-        cls,
-        field_name: str,
-        context_models: tuple[str, ...],
-        context_params: tuple[str, ...],
-    ) -> str:
-        """Create the deterministic aggregate uid for a context.
-
-        The single composer of the legacy uid grammar
-        (``field@models[m1,m2]@params[p1]``, context members sorted); only
-        the session resolver interprets the produced string.
-
-        Args:
-            field_name: Base field name of the aggregate.
-            context_models: Tuple of model IDs.
-            context_params: Tuple of parameter names.
-
-        Returns:
-            A deterministic UID string based on the context.
-        """
-        parts = [field_name]
-        if context_models:
-            parts.append(f"models[{','.join(sorted(context_models))}]")
-        if context_params:
-            parts.append(f"params[{','.join(sorted(context_params))}]")
-        return "@".join(parts)

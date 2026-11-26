@@ -54,6 +54,7 @@ def test_stable_rank_matches_closed_form() -> None:
     from diffract.core.compute.kernels.ranks import stable_rank
 
     assert stable_rank(5.0, 4.0) == pytest.approx(1.5625)
+    assert stable_rank(5e-300, 4e-300) == pytest.approx(25 / 16)
 
 
 @given(svals=positive_svals, scale=scales)
@@ -98,7 +99,6 @@ def test_rank_kernels_survive_degenerate_spectra() -> None:
         stable_rank,
     )
 
-    # EPS guards keep the zero (rank-collapsed) spectrum finite and warning-free.
     assert effective_rank(np.zeros(3)) == pytest.approx(1.0)
     assert stable_rank(0.0, 0.0) == 0.0
     assert mp_soft_rank(0.0, 0.0) == 0.0
@@ -121,3 +121,15 @@ def test_hard_rank_is_scale_invariant() -> None:
     esd = np.array([1e-4, 1e-3, 1e-2, 1e-1])
     assert hard_rank(0.01 * esd) == hard_rank(esd)
     assert hard_rank(100.0 * esd) == hard_rank(esd)
+
+
+@pytest.mark.parametrize("bad", [np.inf, -np.inf, np.nan])
+def test_nonfinite_singular_values_give_undefined_ranks(bad) -> None:
+    from diffract.core.compute.kernels.ranks import (
+        _spectral_stable_rank,
+        effective_rank,
+    )
+
+    spectrum = np.array([0.0, 3.0, bad])
+    assert np.isnan(_spectral_stable_rank(spectrum))
+    assert np.isnan(effective_rank(spectrum))

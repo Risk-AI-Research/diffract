@@ -6,45 +6,43 @@ for different data types (parameters, relations, etc.).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Self
+
+from typing_extensions import TypeVar
 
 from diffract.core.storage.interface import DEFAULT_TABLE
 
-if TYPE_CHECKING:
-    from .interface import IDataRepository
+from .interface import IDataProxy, IDataRepository, IMetadata
 
-TMetadata = TypeVar("TMetadata")
+if TYPE_CHECKING:
+    from diffract.core.storage.catalog import ValuePointer
+    from diffract.core.storage.catalog_manager import CatalogStorageManager
+
+TMetadata = TypeVar("TMetadata", bound=IMetadata)
+TRepository = TypeVar(
+    "TRepository",
+    bound=IDataRepository[Any, Any],
+    default=IDataRepository[TMetadata, Any],
+)
 T = TypeVar("T")
+_CACHE_MISS = object()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
-class DataProxy[TMetadata]:
-    """Generic lazy-loading proxy for storage-backed data entities.
-
-    Provides efficient access to data through intelligent caching and
-    storage management. Entities are loaded on-demand and can be
-    prefetched for batch operations. The proxy pattern allows working
-    with large datasets without memory constraints.
-
-    Type Parameters:
-        TMetadata: The metadata type for this proxy (e.g., ParameterMetadata).
-
-    Example:
-        >>> proxy = DataProxy.create_and_store(
-        ...     meta=metadata,
-        ...     repository=repository,
-        ... )
-        >>> value = proxy.get_field("weights")
-        >>> proxy.set_field("computed_metric", computed_value)
-
-    Attributes:
-        meta: Immutable entity metadata.
-        _repository: Repository that owns storage/cache/metadata managers.
-    """
+class DataProxy(IDataProxy[TMetadata], Generic[TMetadata, TRepository]):
+    """Access the stored fields of a metadata record through its owning repository."""
 
     meta: TMetadata
-    _repository: IDataRepository[TMetadata, DataProxy[TMetadata]] = field(repr=False)
+    _repository: TRepository = field(repr=False)
+
+    def __class_getitem__(cls, parameters: Any) -> Any:
+        """Allow DataProxy[Metadata] on Python 3.12 with older typing-extensions."""
+        if not isinstance(parameters, tuple):
+            parameters = (parameters, IDataRepository[parameters, Any])
+        return super().__class_getitem__(parameters)  # type: ignore[misc]  # Generic hook on 3.12
 
     @classmethod
     def get_table(cls) -> str:
@@ -58,21 +56,9 @@ class DataProxy[TMetadata]:
     def create_and_store(
         cls,
         meta: TMetadata,
-        repository: IDataRepository[TMetadata, DataProxy[TMetadata]],
-    ) -> DataProxy[TMetadata]:
-        """Create proxy and store metadata in index.
-
-        Factory method that creates a new proxy and immediately
-        stores the metadata to the metadata index.
-
-        Args:
-            meta: Entity metadata.
-            repository: Repository owning storage, cache, and metadata managers.
-
-        Returns:
-            New proxy with metadata stored.
-        """
-        # Store full metadata in the index
+        repository: TRepository,
+    ) -> Self:
+        """Persist the metadata and add its proxy to the repository."""
         repository.metadata_index.upsert(
             cls.get_table(),
             **meta.to_dict(),
@@ -85,13 +71,42 @@ class DataProxy[TMetadata]:
         repository.append(proxy)
         return proxy
 
-    def set_field(self, name: str, value: Any) -> None:
+    def _catalog_storage(self) -> CatalogStorageManager | None:
+        storage = self._repository.storage_manager
+        if getattr(
+            storage, "uses_value_revisions", False
+        ) is True and self.get_table() in {
+            "parameters",
+            "aggregates",
+        }:
+            return storage
+        return None
+
+    def set_field(self, name: str, value: Any, *, initial: bool = False) -> None:
         """Store a named field for this entity.
 
         Args:
             name: Field name to store.
             value: Value to store (must be serializable).
+            initial: Prefer inserting a new field pointer.
         """
+        if (storage := self._catalog_storage()) is not None:
+            publish = getattr(type(storage), "publish_field", None)
+            if initial:
+                publish = getattr(type(storage), "publish_initial_field", publish)
+            if publish is None:
+                pointer = storage.write_field(
+                    self.meta.uid, name, value, table=self.get_table()
+                )
+                payload_written = True
+            else:
+                pointer, payload_written = publish(
+                    storage, self.meta.uid, name, value, table=self.get_table()
+                )
+            cache = self._repository.cache_manager
+            if payload_written and getattr(cache, "supports_revisions", False) is True:
+                cache.set_field(self.meta.uid, name, value, revision=pointer.revision)
+            return
         self._repository.storage_manager.set_field(
             obj_uid=self.meta.uid,
             field_name=name,
@@ -101,7 +116,12 @@ class DataProxy[TMetadata]:
         self.prefetch_field(name, value)
 
     def get_field(
-        self, name: str, default: T | None = None, auto_prefetch: bool = True
+        self,
+        name: str,
+        default: T | None = None,
+        auto_prefetch: bool = True,
+        *,
+        kernel_input: bool = False,
     ) -> Any | T:
         """Retrieve a named field for this entity.
 
@@ -112,6 +132,7 @@ class DataProxy[TMetadata]:
             name: Field name to retrieve.
             default: Default value if field doesn't exist.
             auto_prefetch: Whether to cache the value after loading.
+            kernel_input: Allow borrowing a resident input for kernel execution.
 
         Returns:
             Field value or default if not found.
@@ -120,6 +141,16 @@ class DataProxy[TMetadata]:
             KeyError: If field doesn't exist and no default provided.
         """
         cache = self._repository.cache_manager
+        if (storage := self._catalog_storage()) is not None:
+            try:
+                pointer = storage.live_pointer(self.meta.uid, name, self.get_table())
+            except KeyError:
+                if default is not None:
+                    return default
+                raise
+            return self.read_resolved_field(
+                name, pointer, auto_prefetch=auto_prefetch, kernel_input=kernel_input
+            )
         if (cache is not None) and self.is_field_prefetched(name):
             value = cache.get_field(obj_uid=self.meta.uid, field_name=name)
         else:
@@ -139,6 +170,39 @@ class DataProxy[TMetadata]:
 
         return value
 
+    def read_resolved_field(
+        self,
+        name: str,
+        pointer: ValuePointer,
+        *,
+        auto_prefetch: bool,
+        best_effort: bool = False,
+        kernel_input: bool = False,
+    ) -> Any:
+        """Read a catalog selection using the cache entry for its precise revision."""
+        cache = self._repository.cache_manager
+        storage = self._repository.storage_manager
+        versioned = getattr(cache, "supports_revisions", False) is True
+        if versioned:
+            value = cache.get_field(
+                self.meta.uid, name, revision=pointer.revision, default=_CACHE_MISS
+            )
+            if value is not _CACHE_MISS:
+                return value
+        value = (
+            storage.read_kernel_input(pointer)
+            if kernel_input
+            else storage.read_pointer(pointer)
+        )
+        if auto_prefetch and versioned:
+            try:
+                cache.set_field(self.meta.uid, name, value, revision=pointer.revision)
+            except Exception:
+                if not best_effort:
+                    raise
+                logger.debug("Could not cache exported field %s", name, exc_info=True)
+        return value
+
     def has_field(self, name: str) -> bool:
         """Check if entity has a named field.
 
@@ -150,6 +214,8 @@ class DataProxy[TMetadata]:
         Returns:
             True if field exists, False otherwise.
         """
+        if (storage := self._catalog_storage()) is not None:
+            return storage.has_field(self.meta.uid, name, table=self.get_table())
         cache = self._repository.cache_manager
         if (cache is not None) and (self.is_field_prefetched(name)):
             return True
@@ -177,6 +243,14 @@ class DataProxy[TMetadata]:
         cache = self._repository.cache_manager
         if cache is None:
             return True
+        if (storage := self._catalog_storage()) is not None:
+            if getattr(cache, "supports_revisions", False) is not True:
+                return False
+            try:
+                pointer = storage.live_pointer(self.meta.uid, name, self.get_table())
+            except KeyError:
+                return False
+            return cache.has_field(self.meta.uid, name, revision=pointer.revision)
         return cache.has_field(obj_uid=self.meta.uid, field_name=name)
 
     def prefetch_field(self, name: str, value: Any) -> None:
@@ -186,6 +260,10 @@ class DataProxy[TMetadata]:
             name: Field name to cache.
             value: Value to cache.
         """
+        if self._catalog_storage() is not None:
+            # A caller-supplied value has no associated catalog revision.
+            self.try_prefetch_field(name)
+            return
         cache = self._repository.cache_manager
         if cache is not None:
             cache.set_field(obj_uid=self.meta.uid, field_name=name, value=value)
@@ -197,8 +275,25 @@ class DataProxy[TMetadata]:
             name: Field name to prefetch.
 
         Returns:
-            True if field was prefetched or already cached, False if not found.
+            True if prefetching succeeds or caching is disabled. With a cache,
+            False if the field is missing from storage.
         """
+        if (storage := self._catalog_storage()) is not None:
+            cache = self._repository.cache_manager
+            if cache is None:
+                return True
+            try:
+                pointer = storage.live_pointer(self.meta.uid, name, self.get_table())
+            except KeyError:
+                return False
+            if getattr(
+                cache, "supports_revisions", False
+            ) is True and not cache.has_field(
+                self.meta.uid, name, revision=pointer.revision
+            ):
+                value = storage.read_pointer(pointer)
+                cache.set_field(self.meta.uid, name, value, revision=pointer.revision)
+            return True
         if not self.is_field_prefetched(name):
             try:
                 value = self._repository.storage_manager.get_field(
@@ -224,7 +319,7 @@ class DataProxy[TMetadata]:
             table=self.get_table(),
         )
         cache = self._repository.cache_manager
-        if (cache is not None) and self.is_field_prefetched(name):
+        if cache is not None:
             cache.erase_field(obj_uid=self.meta.uid, field_name=name)
 
     def list_fields(self) -> list[str]:

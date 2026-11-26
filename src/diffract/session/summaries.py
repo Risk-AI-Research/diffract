@@ -3,6 +3,55 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from diffract.core.data.nn.extractors.report import ExtractionReport
+
+
+@dataclass(frozen=True)
+class PairMismatch:
+    """Resolved checkpoints and names that had no counterpart in the pair."""
+
+    source: tuple[str, int]
+    target: tuple[str, int]
+    source_only: tuple[str, ...]
+    target_only: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ShapeMismatch:
+    """Stored matrix shapes incompatible with a requested field."""
+
+    name: str
+    source_shape: tuple[int, ...]
+    target_shape: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PairCoverage(PairMismatch):
+    """Name join in scope, original admission reports and results by field."""
+
+    matched: tuple[str, ...]
+    source_extraction: ExtractionReport | None
+    target_extraction: ExtractionReport | None
+    incompatible: dict[str, tuple[ShapeMismatch, ...]]
+    measured: dict[str, tuple[str, ...]]
+
+    @property
+    def source_count(self) -> int:
+        """Number of stored source names in the active scope."""
+        return len(self.matched) + len(self.source_only)
+
+    @property
+    def target_count(self) -> int:
+        """Number of stored target names in the active scope."""
+        return len(self.matched) + len(self.target_only)
+
+    @property
+    def measurement_counts(self) -> dict[str, int]:
+        """Count distinct measured aggregates for each field of this ordered pair."""
+        return {field: len(names) for field, names in self.measured.items()}
 
 
 @dataclass(frozen=True)
@@ -21,12 +70,18 @@ class ApplySummary:
         cross_model_fields: Written CROSS_MODEL-level fields.
         skipped: Requested fields that produced nothing, each paired with a
             short reason (already computed, or not applicable to the scope).
+        forced_fields: Fields produced by a kernel run with ``recompute=True``.
+        pair_mismatches: Parameters without a same-name counterpart in a pair.
+        pair_coverage: One report per distinct ordered pair when requested.
     """
 
     parameter_fields: tuple[str, ...] = ()
     in_model_fields: tuple[str, ...] = ()
     cross_model_fields: tuple[str, ...] = ()
     skipped: tuple[tuple[str, str], ...] = ()
+    forced_fields: tuple[str, ...] = ()
+    pair_mismatches: tuple[PairMismatch, ...] = ()
+    pair_coverage: tuple[PairCoverage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,7 +94,7 @@ class EraseSummary:
     erased field for ``results.erase``.
 
     Attributes:
-        models: Model ids erased (``models.erase``).
+        models: Names of models affected by ``models.erase``.
         fields: Field names erased (``results.erase``).
         affected_uids: Number of parameter entries that lost data.
     """

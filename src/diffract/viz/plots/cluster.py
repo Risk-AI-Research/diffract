@@ -8,8 +8,9 @@ import numpy as np
 import plotly.graph_objects as go
 
 from diffract.core.data.nn.params.schema import ParameterType
+from diffract.session.resolver import FieldSelector
 from diffract.viz.data import Entry, EntryContext
-from diffract.viz.data.extraction import get_field_value
+from diffract.viz.data.extraction import FieldNotFoundError, get_field_value
 from diffract.viz.plots.base.plot import Plot
 from diffract.viz.styling import (
     AxesStyle,
@@ -37,7 +38,7 @@ class ClusterBarChart(Plot):
     key. When ``draw_statistics`` is set, per-group std is drawn below zero.
     """
 
-    field: str
+    field: str | FieldSelector
 
     group_by: list[str] = field(default_factory=lambda: ["model_id"])
     aggregate_by: str | None = None
@@ -192,7 +193,7 @@ class ClusterBarChart(Plot):
     def _get_field(self, ctx: EntryContext) -> Any:
         try:
             return get_field_value(ctx, self.field)
-        except ValueError:
+        except FieldNotFoundError:
             return None
 
     @staticmethod
@@ -202,7 +203,10 @@ class ClusterBarChart(Plot):
     ) -> tuple[tuple[str, str], ...] | None:
         kvs: list[tuple[str, str]] = []
         for key in group_by:
-            value = ctx.fields.get(key)
+            try:
+                value = get_field_value(ctx, key)
+            except FieldNotFoundError:
+                return None
             if value is None:
                 return None
             kvs.append((key, str(value)))
@@ -289,7 +293,7 @@ class ClusterBarChart(Plot):
         fig = go.Figure()
 
         if not self._traces_data:
-            fig.update_layout(title=self.title or self.field)
+            fig.update_layout(title=self.title or self._field_label(self.field))
             return fig
 
         for trace_id, trace_data in self._traces_data.items():
@@ -344,9 +348,11 @@ class ClusterBarChart(Plot):
             "showgrid": axes_style.show_grid,
             "gridcolor": axes_style.grid_color,
         }
-        fig.update_xaxes(title=self.field, **axes_kwargs)
+        fig.update_xaxes(title=self._field_label(self.field), **axes_kwargs)
         fig.update_yaxes(**axes_kwargs)
-        fig.update_layout(title=self.title or f"Cluster bar chart ({self.field})")
+        fig.update_layout(
+            title=self.title or f"Cluster bar chart ({self._field_label(self.field)})"
+        )
         return fig
 
 

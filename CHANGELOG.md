@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+## 0.4.0
+
+### Checkpoints and analysis
+
+- `diffract.analyze(model)` returns a per-parameter empirical spectrum, norms,
+  ranks and a scalar summary.
+- `diffract.compare(source, target)` reports relative weight and spectrum
+  changes and per-component singular-vector agreement.
+- `compute.apply("l_overlap", pairs=[(("net", 1000), ("net", 2000))])` compares
+  ordered checkpoints by parameter name. `ApplySummary.pair_mismatches`
+  lists parameters without a same-name counterpart.
+- `results.export(..., shape="long")` includes parameter and aggregate join
+  keys, checkpoint roles, run IDs where recorded, and separate scalar and
+  array value columns.
+
+### Reproducibility and storage
+
+- `results.status(...)` reports whether results are fresh for their inputs
+  and effective kernel configuration. `compute.apply(..., recompute=True)`
+  forces the kernels that produce the requested fields.
+- `results.erase(...)` erases sibling fields written by the same kernel run.
+  Use `python -m diffract.store fsck STORE` to check catalog consistency and
+  value presence. Use `python -m diffract.store gc STORE --dry-run` to preview
+  value collection.
+- SVD defaults to `precision="preserve"`. Set `precision` to `"float32"` or
+  `"float64"` to choose a working dtype, or `allow_cuda=False` to select CPU.
+  The [execution record](docs/reference/metrics/spectral.md#precision-and-execution-records)
+  identifies the working dtype and solver for a recorded `run_id`.
+- PyTorch BF16 weights are admitted as FP32 with their source dtype recorded.
+  `analyze` and `compare` accept `return_coverage=True` to report extraction
+  outcomes and, for comparisons, the matched names measured for each field.
+- CPU SVD streams input matrices and compares its workspace estimate with
+  available host memory when the platform reports it. Randomized spectra
+  compute singular values by default and compute singular vectors on request.
+
+### Behavior changes
+
+- Upgrade persistent stores with legacy parameter IDs using
+  `python -m diffract.migrate`. Use `--dry-run` to preview the conversion and
+  see the [storage guide](docs/guide/recipes/storage_and_cache.md#upgrading-a-store-with-legacy-parameter-ids)
+  for backup and restoration instructions.
+- `models.add(model, model_id="net")` stores checkpoint zero. Pass `step` to
+  add another checkpoint under the same name. Each model, step and parameter
+  name identifies one parameter.
+- Parameter and aggregate UIDs are opaque. A model rename updates its name
+  while preserving stored results and aggregate membership.
+- `models.list()` returns model names. Use `layout="coordinates"` for
+  (name, step) pairs or `layout="grouped"` for the steps of each model.
+  `models.erase(("net", 1000))` removes one checkpoint and the aggregates
+  that depend on it. A filtered session limits erasure to its visible parameters.
+- Aggregate imports require each requested model name and parameter name to
+  match within the current scope.
+  Wide exports label directed comparisons with their source and target coordinates.
+
 ## 0.3.1
 
 Hardens the session and storage layers: requests that cannot be served

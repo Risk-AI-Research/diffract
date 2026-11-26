@@ -4,7 +4,7 @@ Diffract is a Python library for analyzing deep neural network weights and track
 
 ## Installation
 
-Diffract requires Python 3.12:
+Install Diffract with Python 3.12 or newer.
 
 ```bash
 pip install diffract-core
@@ -21,23 +21,23 @@ uv sync --extra dev
 
 ### Optional extras
 
-| Extra | Description |
-|-------|-------------|
-| `torch` | PyTorch model support |
-| `tensorflow` | TensorFlow/Keras model support |
-| `flax` | Flax/JAX model support |
-| `onnx` | ONNX model support |
-| `frameworks` | TensorFlow + Flax + ONNX bundle |
-| `viz` | Plotly visualization helpers |
-| `pandas` | Export to pandas DataFrames |
-| `polars` | Export to polars DataFrames |
-| `redis` | Redis cache backend |
-| `zarr` | Zarr storage backend (cloud-native arrays via fsspec) |
-| `taichi` | Taichi-accelerated heavy-tailed fitting and bootstrap p-value kernels |
-| `common` | viz + pandas + polars (recommended) |
-| `all` | torch + viz + taichi + pandas + polars |
-| `notebooks` | Dependencies for the example notebooks |
-| `docs` | Build this documentation |
+| Extra        | Description                                                           |
+| ------------ | --------------------------------------------------------------------- |
+| `torch`      | PyTorch model support                                                 |
+| `tensorflow` | TensorFlow/Keras model support                                        |
+| `flax`       | Flax/JAX model support                                                |
+| `onnx`       | ONNX model support                                                    |
+| `frameworks` | TensorFlow + Flax + ONNX bundle                                       |
+| `viz`        | Plotly visualization helpers                                          |
+| `pandas`     | Export to pandas DataFrames                                           |
+| `polars`     | Export to polars DataFrames                                           |
+| `redis`      | Redis cache backend                                                   |
+| `zarr`       | Zarr storage backend (cloud-native arrays via fsspec)                 |
+| `taichi`     | Taichi-accelerated heavy-tailed fitting and bootstrap p-value kernels |
+| `common`     | viz + pandas + polars (recommended)                                   |
+| `all`        | torch + viz + taichi + pandas + polars                                |
+| `notebooks`  | Dependencies for the example notebooks                                |
+| `docs`       | Build this documentation                                              |
 
 Install extras with `pip install "diffract-core[torch,common]"` (quotes matter
 in zsh), or `uv sync --extra torch --extra common` in a clone.

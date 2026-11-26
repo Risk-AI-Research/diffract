@@ -7,16 +7,16 @@ helpers to register custom formatters and retrieve formatters by name.
 from __future__ import annotations
 
 import difflib
-from typing import TYPE_CHECKING
 
 import diffract.core.utils.imports as import_utils
+from diffract.core.export.interface import IResultFormatter, StructuredExportResult
 
 from .dict_formatter import DictFormatter
 from .json_formatter import JsonFormatter
 from .list_formatter import ListFormatter
+from .long import get_long_formatter
 
-if TYPE_CHECKING:
-    from diffract.core.export.interface import IResultFormatter
+__all__ = ["FORMATTERS", "get_formatter", "get_long_formatter", "register_formatter"]
 
 # Formats backed by optional dependencies, mapped to the extra providing them
 _OPTIONAL_FORMAT_EXTRAS: dict[str, str] = {
@@ -50,7 +50,20 @@ def register_formatter(name: str, formatter: IResultFormatter) -> None:
     Args:
         name: Unique format name.
         formatter: Formatter instance to register.
+
+    Raises:
+        TypeError: If the formatter does not implement the structured result contract.
     """
+    if not isinstance(formatter, IResultFormatter) or not callable(
+        formatter.format_results
+    ):
+        raise TypeError("A formatter must implement format_results.")
+    empty = formatter.format_results({}, [], ())
+    if not isinstance(empty, StructuredExportResult):
+        raise TypeError(
+            "Custom format_results must return StructuredExportResult "
+            f"for empty and populated results; got {type(empty).__name__}."
+        )
     FORMATTERS[name] = formatter
 
 

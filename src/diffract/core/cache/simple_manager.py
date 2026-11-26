@@ -64,6 +64,8 @@ class SimpleLRUCacheManager(ICacheManager):
         _lock: Thread lock for thread-safe operations.
     """
 
+    supports_revisions = True
+
     def __init__(
         self,
         *,
@@ -238,12 +240,15 @@ class SimpleLRUCacheManager(ICacheManager):
                 uid, field_name = uid_field
                 self._update_field_index(uid, field_name, adding=False)
 
-    def has_field(self, obj_uid: UID, field_name: str) -> bool:
+    def has_field(
+        self, obj_uid: UID, field_name: str, *, revision: str | None = None
+    ) -> bool:
         """Check if an object has a specific field in cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to check.
+            revision: Catalog revision associated with this value, when supplied.
 
         Returns:
             True if the field exists and is not expired, False otherwise.
@@ -264,14 +269,23 @@ class SimpleLRUCacheManager(ICacheManager):
                 self._update_field_index(obj_uid, field_name, adding=False)
                 return False
 
-            return True
+            return revision is None or _tag.startswith(revision + "/")
 
-    def get_field(self, obj_uid: UID, field_name: str) -> Any:
+    def get_field(
+        self,
+        obj_uid: UID,
+        field_name: str,
+        *,
+        revision: str | None = None,
+        default: Any = None,
+    ) -> Any:
         """Retrieve a field value from cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to retrieve.
+            revision: Catalog revision associated with this value, when supplied.
+            default: Value returned on a cache miss.
 
         Returns:
             The cached value or None if field doesn't exist or is expired.
@@ -281,7 +295,7 @@ class SimpleLRUCacheManager(ICacheManager):
             item = self._store.get(key)
 
             if not item:
-                return None
+                return default
 
             data, tag, ts = item
 
@@ -291,11 +305,13 @@ class SimpleLRUCacheManager(ICacheManager):
                 self._lru.pop(key, None)
                 self._current_bytes -= entry_size
                 self._update_field_index(obj_uid, field_name, adding=False)
-                return None
+                return default
 
             self._touch_lru(key)
 
-            return decode_value(data, tag)
+            if revision is not None and not tag.startswith(revision + "/"):
+                return default
+            return decode_value(data, tag.rsplit("/", 1)[-1])
 
     def list_objs_has_field(self, field_name: str) -> list[UID]:
         """List all object UIDs that have a specific field.
@@ -361,12 +377,15 @@ class SimpleLRUCacheManager(ICacheManager):
 
             return result
 
-    def set_field(self, obj_uid: UID, field_name: str, value: Any) -> None:
+    def set_field(
+        self, obj_uid: UID, field_name: str, value: Any, *, revision: str | None = None
+    ) -> None:
         """Store a field value in cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to store.
+            revision: Catalog revision associated with this value, when supplied.
             value: Value to cache. Supported kinds are NumPy arrays, bytes,
                 and JSON-serializable values.
 
@@ -375,6 +394,8 @@ class SimpleLRUCacheManager(ICacheManager):
         """
         key = self._make_key(obj_uid, field_name)
         data, tag = encode_value(value)
+        if revision is not None:
+            tag = revision + "/" + tag
         entry_size = self._calculate_entry_size(key, data)
 
         with self._lock:

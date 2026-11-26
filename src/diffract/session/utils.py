@@ -21,6 +21,10 @@ def did_you_mean(name: str, candidates: Iterable[str]) -> str:
     return f" Did you mean: {', '.join(close)}?" if close else ""
 
 
+from diffract.core.data.nn.params.schema import StepSelection
+from diffract.session.resolver import resolve_training_coordinates
+
+
 def filter_parameter_view(
     view: IParameterView,
     *,
@@ -28,6 +32,7 @@ def filter_parameter_view(
     parameter_names: list[str] | None = None,
     parameter_types: list[ParameterType] | None = None,
     model_ids: list[str] | None = None,
+    steps: StepSelection | None = None,
 ) -> IParameterView:
     """Apply the given filters to a parameter view.
 
@@ -40,6 +45,7 @@ def filter_parameter_view(
         parameter_names: Parameter names to filter by, or None to skip.
         parameter_types: Parameter types to filter by, or None to skip.
         model_ids: Model IDs to filter by, or None to skip.
+        steps: Checkpoint numbers or final aliases, or None to skip.
 
     Returns:
         The filtered parameter view.
@@ -63,6 +69,9 @@ def filter_parameter_view(
         if isinstance(parameter_ids, (str, int)):
             parameter_ids = [parameter_ids]
         view = view[parameter_ids]
+
+    if steps is not None:
+        view = view.filter_by_coordinates(resolve_training_coordinates(view, steps))
 
     return view
 

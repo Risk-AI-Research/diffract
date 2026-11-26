@@ -13,20 +13,45 @@ Example:
 from __future__ import annotations
 
 import types
+from collections.abc import Sequence
+from copy import deepcopy
 from typing import Any, Self
 
-from .interface import DEFAULT_TABLE, UID, IStorageManager
+from .interface import DEFAULT_TABLE, UID
+from .keys import row_address
 from .metadata import infer_value_metadata
+from .row_blobs import RowBlobs
 
 
-class RAMStorageManager(IStorageManager):
+class RAMStorageManager(RowBlobs):
     """RAM-only storage manager with table support."""
+
+    backend_name = "ram"
 
     def __init__(self) -> None:
         # Maps a table and field name to a mapping from object uid to value.
         self._storage: dict[tuple[str, str], dict[UID, Any]] = {}
         # Maps a table, field name and object uid to that value's metadata.
         self._metadata: dict[tuple[str, str, UID], dict[str, Any]] = {}
+
+    def move_blob(self, source: str, target: str) -> None:
+        """Move one in-memory value without copying its payload."""
+        src_table, src_field, src_uid = row_address(source)
+        dst_table, dst_field, dst_uid = row_address(target)
+        if not self.has_field(src_uid, src_field, table=src_table):
+            raise KeyError(source)
+        if source == target:
+            return
+        if self.has_field(dst_uid, dst_field, table=dst_table):
+            raise FileExistsError(target)
+        source_values = self._storage[self._key(src_table, src_field)]
+        self._storage.setdefault(self._key(dst_table, dst_field), {})[dst_uid] = (
+            source_values[src_uid]
+        )
+        self._metadata[(dst_table, dst_field, dst_uid)] = self._metadata[
+            (src_table, src_field, src_uid)
+        ]
+        self.erase_field(src_uid, src_field, table=src_table)
 
     def _key(self, table: str, field_name: str) -> tuple[str, str]:
         """Create storage key from table and field name."""
@@ -42,12 +67,52 @@ class RAMStorageManager(IStorageManager):
     def get_field(
         self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
     ) -> Any:
-        """Get a field value from memory."""
-        key = self._key(table, field_name)
-        return self._storage[key][obj_uid]
+        """Return an independent copy of the stored field."""
+        return deepcopy(self._storage[self._key(table, field_name)][obj_uid])
+
+    borrows_kernel_inputs = True
+
+    def borrow_blob(self, key: str) -> Any:
+        """Borrow a resident field for kernel execution."""
+        table, field, uid = row_address(key)
+        return self._storage[self._key(table, field)][uid]
+
+    def owners_with_fields(
+        self, uids: Sequence[str], fields: Sequence[str], *, table: str, inverse: bool
+    ) -> set[str]:
+        """Find owners with all requested fields, or with none when inverted."""
+        owners = set(uids)
+        for field in fields:
+            bucket = self._storage.get((table, field), {})
+            if inverse:
+                owners.difference_update(bucket)
+            else:
+                owners.intersection_update(bucket)
+        return owners
+
+    def field_metadata_for(
+        self, required: dict[str, list[str]], *, table: str
+    ) -> dict[tuple[str, str], dict[str, Any] | None]:
+        """Read metadata for the requested owner and field pairs."""
+        return {
+            (uid, field): self._metadata.get((table, field, uid))
+            for uid, fields in required.items()
+            for field in fields
+        }
+
+    def fields_by_owner(
+        self, uids: Sequence[str], *, table: str
+    ) -> dict[str, list[str]]:
+        """List requested owners' fields without revisiting each storage bucket."""
+        result = {uid: [] for uid in uids}
+        for (stored_table, field), objects in self._storage.items():
+            if stored_table == table:
+                for uid in result.keys() & objects.keys():
+                    result[uid].append(field)
+        return result
 
     def list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]:
         """List field names (optionally only those containing the given object)."""
         if obj_uid is None:
@@ -80,12 +145,10 @@ class RAMStorageManager(IStorageManager):
     ) -> None:
         """Store a field value in memory."""
         key = self._key(table, field_name)
-        if key not in self._storage:
-            self._storage[key] = {}
-        self._storage[key][obj_uid] = value
-        self._metadata[(table, field_name, obj_uid)] = infer_value_metadata(
-            value
-        ).to_jsonable()
+        snapshot = deepcopy(value)
+        metadata = infer_value_metadata(snapshot).to_jsonable()
+        self._storage.setdefault(key, {})[obj_uid] = snapshot
+        self._metadata[(table, field_name, obj_uid)] = metadata
 
     def erase_field(
         self, obj_uid: UID, field_name: str, *, table: str = DEFAULT_TABLE
@@ -121,6 +184,11 @@ class RAMStorageManager(IStorageManager):
         to_delete = [k for k in self._metadata if k[0] == table and k[1] == field_name]
         for k in to_delete:
             del self._metadata[k]
+
+    def clear_raw_tables(self, protected: set[str]) -> None:
+        """Clear raw tables while preserving catalog blobs."""
+        for table in {table for table, _ in self._storage} - protected:
+            self.clear(table=table)
 
     def clear(self, *, table: str | None = None) -> None:
         """Remove data from memory.

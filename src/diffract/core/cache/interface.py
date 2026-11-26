@@ -29,24 +29,36 @@ class ICacheManager(Protocol):
     identified by UID and contain named fields with arbitrary values.
     """
 
-    def has_field(self, obj_uid: UID, field_name: str) -> bool:
+    def has_field(
+        self, obj_uid: UID, field_name: str, *, revision: str | None = None
+    ) -> bool:
         """Check if an object has a specific field in cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to check.
+            revision: Catalog revision to match when supplied.
 
         Returns:
             True if the field exists and is not expired, False otherwise.
         """
         ...
 
-    def get_field(self, obj_uid: UID, field_name: str) -> Any:
+    def get_field(
+        self,
+        obj_uid: UID,
+        field_name: str,
+        *,
+        revision: str | None = None,
+        default: Any = None,
+    ) -> Any:
         """Retrieve a field value from cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to retrieve.
+            revision: Catalog revision to match when supplied.
+            default: Value returned on a cache miss.
 
         Returns:
             The cached value or None if field doesn't exist or is expired.
@@ -64,12 +76,15 @@ class ICacheManager(Protocol):
         """
         ...
 
-    def set_field(self, obj_uid: UID, field_name: str, value: Any) -> None:
+    def set_field(
+        self, obj_uid: UID, field_name: str, value: Any, *, revision: str | None = None
+    ) -> None:
         """Store a field value in cache.
 
         Args:
             obj_uid: Unique identifier for the cached object.
             field_name: Name of the field to store.
+            revision: Catalog revision to match when supplied.
             value: Value to cache. Must be a numpy array, a JSON-serializable
                 value, or bytes.
 

@@ -3,13 +3,24 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pytest
 
+from diffract.core.data.identity import DuplicateParameterError
+from diffract.core.data.metadata.errors import UniqueConstraintError
+from diffract.core.data.metadata.sqlite_index import SQLiteMetadataIndex
+from diffract.core.data.nn.aggregates.metadata import AggregateMetadata
+from diffract.core.data.nn.aggregates.proxy import AggregateProxy
+from diffract.core.data.nn.aggregates.repository import AggregateRepository
 from diffract.core.data.nn.params.metadata import ParameterMetadata
 from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.repository import ParameterRepository
 from diffract.core.data.nn.params.schema import ParameterType
+from diffract.core.storage.catalog_manager import CatalogStorageManager
+from diffract.core.storage.ram_manager import RAMStorageManager
 
 if TYPE_CHECKING:
     from diffract.core.data.nn.params.interface import IParameterView
+
+
+pytestmark = pytest.mark.unit
 
 
 class FakeStorage:
@@ -109,155 +120,14 @@ class FakeCache:
             del self._cache[k]
 
 
-class FakeMetadataIndex:
-    """Fake metadata index for testing."""
-
-    def __init__(self) -> None:
-        self._tables: dict[str, dict[str, dict[str, Any]]] = {}
-        self._schemas: dict[str, dict[str, type]] = {}
-
-    def __enter__(self) -> "FakeMetadataIndex":
-        return self
-
-    def __exit__(self, _exc_type: object, _exc_val: object, _exc_tb: object) -> None:
-        return None
-
-    def define_table(
-        self,
-        table: str,
-        columns: dict[str, type],
-        indexes: list[str] | None = None,
-    ) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._schemas[table] = columns
-
-    def insert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        self._tables[table][uid] = {"uid": uid, **fields}
-
-    def update(self, table: str, uid: str, **fields: Any) -> None:
-        if table in self._tables and uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-
-    def upsert(self, table: str, uid: str, **fields: Any) -> None:
-        if table not in self._tables:
-            self._tables[table] = {}
-        if uid in self._tables[table]:
-            self._tables[table][uid].update(fields)
-        else:
-            self._tables[table][uid] = {"uid": uid, **fields}
-
-    def get(self, table: str, uid: str) -> dict[str, Any] | None:
-        if table not in self._tables:
-            return None
-        return self._tables[table].get(uid)
-
-    def get_batch(self, table: str, uids: list[str]) -> list[dict[str, Any] | None]:
-        if table not in self._tables:
-            return [None] * len(uids)
-        return [self._tables[table].get(uid) for uid in uids]
-
-    def query(
-        self,
-        table: str,
-        where: dict[str, Any] | None = None,
-        where_in: dict[str, list[Any]] | None = None,
-        where_like: dict[str, str] | None = None,
-        order_by: list[str] | None = None,
-        limit: int | None = None,
-    ) -> list[str]:
-        import re as re_module
-
-        if table not in self._tables:
-            return []
-
-        results = []
-        for uid, record in self._tables[table].items():
-            match = True
-
-            if where:
-                for col, val in where.items():
-                    if record.get(col) != val:
-                        match = False
-                        break
-
-            if match and where_in:
-                for col, vals in where_in.items():
-                    if col == "uid":
-                        if uid not in vals:
-                            match = False
-                            break
-                    elif record.get(col) not in vals:
-                        match = False
-                        break
-
-            if match and where_like:
-                for col, pattern in where_like.items():
-                    regex = pattern.replace("%", ".*").replace("_", ".")
-                    if not re_module.match(regex, str(record.get(col, ""))):
-                        match = False
-                        break
-
-            if match:
-                results.append(uid)
-
-        if order_by:
-            for col in reversed(order_by):
-                results.sort(key=lambda u: self._tables[table][u].get(col, ""))
-
-        if limit is not None:
-            results = results[:limit]
-
-        return results
-
-    def delete(self, table: str, uid: str) -> None:
-        if table in self._tables:
-            self._tables[table].pop(uid, None)
-
-    def delete_batch(self, table: str, uids: list[str]) -> None:
-        if table in self._tables:
-            for uid in uids:
-                self._tables[table].pop(uid, None)
-
-    def count(self, table: str, where: dict[str, Any] | None = None) -> int:
-        if table not in self._tables:
-            return 0
-        if where is None:
-            return len(self._tables[table])
-        return len(self.query(table, where=where))
-
-    def distinct(self, table: str, column: str) -> list[Any]:
-        if table not in self._tables:
-            return []
-        values = set()
-        for record in self._tables[table].values():
-            if column in record:
-                values.add(record[column])
-        return list(values)
-
-    def list_uids(self, table: str) -> list[str]:
-        if table not in self._tables:
-            return []
-        return list(self._tables[table].keys())
-
-    def clear(self, table: str | None = None) -> None:
-        if table is None:
-            self._tables.clear()
-        elif table in self._tables:
-            self._tables[table].clear()
-
-    def connect(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
 @pytest.fixture
 def managers():
-    return FakeStorage(), FakeCache(), FakeMetadataIndex()
+    index = SQLiteMetadataIndex(":memory:")
+    try:
+        ParameterRepository.define_schema(index)
+        yield FakeStorage(), FakeCache(), index
+    finally:
+        index.close()
 
 
 def make_proxy(
@@ -266,7 +136,7 @@ def make_proxy(
     model_id: str,
     storage: FakeStorage,
     cache: FakeCache,
-    metadata_index: FakeMetadataIndex,
+    metadata_index: SQLiteMetadataIndex,
 ) -> ParameterDataProxy:
     """Create a proxy and store its metadata in the index."""
     meta = ParameterMetadata(name=name, ptype=ptype, model_id=model_id)
@@ -329,13 +199,83 @@ def test_proxy_create_and_store(managers):
     stored = metadata_index.get("parameters", meta.uid)
     assert stored is not None
     assert stored["name"] == "w"
-    assert stored["model_id"] == "m1"
+    assert repository.instances.get(stored["instance_uid"]).name == "m1"
     assert stored["ptype"] == "DENSE"
 
-    # Verify we can get the proxy back
     proxy2 = repository.get_proxy(meta.uid)
+    uncached = ParameterDataProxy(meta=proxy2.meta, _repository=repository)
+    assert hash(proxy2) == hash(meta.uid)
+    assert {proxy2: "stored"}[uncached] == "stored"
     assert proxy2.meta.uid == meta.uid
     assert proxy2.meta.name == "w"
+
+
+def test_aggregate_proxy_hash_uses_persistent_uid(managers):
+    storage, cache, index = managers
+    aggregates = AggregateRepository(storage, index, cache)
+    meta = AggregateMetadata(field_name="score")
+    proxy = AggregateProxy(meta=meta, _repository=aggregates)
+    assert hash(proxy) == hash(meta.uid)
+
+
+def test_direct_kernel_reads_require_each_layer_to_opt_in(managers):
+    class WrappedCatalog(CatalogStorageManager):
+        pass
+
+    class WrappedRepository(ParameterRepository):
+        pass
+
+    class DirectRepository(WrappedRepository):
+        supports_direct_kernel_reads = True
+
+    _, cache, index = managers
+    catalog = CatalogStorageManager(RAMStorageManager(), index)
+    repository = ParameterRepository(catalog, index)
+    meta = ParameterMetadata(name="w", ptype=ParameterType.DENSE, model_id="model")
+    proxy = ParameterDataProxy.create_and_store(meta, repository)
+    proxy.set_field("weights", np.array([2.0]))
+    key = (proxy.meta.uid, "weights")
+
+    view = DirectRepository(catalog, index).create_view()
+    pointers = view.resolve_kernel_inputs(("weights",))
+    assert pointers is not None
+    assert view.kernel_inputs_are_resident()
+    np.testing.assert_array_equal(catalog.read_pointer(pointers[key]), [2.0])
+
+    for wrapped in (
+        WrappedRepository(catalog, index),
+        ParameterRepository(WrappedCatalog(catalog.backend, index), index),
+        ParameterRepository(catalog, index, cache),
+    ):
+        view = wrapped.create_view()
+        assert view.resolve_kernel_inputs(("weights",)) is None
+        assert not view.kernel_inputs_are_resident()
+        np.testing.assert_array_equal(view[proxy.meta.uid].get_field("weights"), [2.0])
+
+
+def test_wrapped_ram_copies_kernel_inputs_until_it_opts_in(managers):
+    class WrappedRAM(RAMStorageManager):
+        pass
+
+    class BorrowingRAM(WrappedRAM):
+        borrows_kernel_inputs = True
+
+    _, _, index = managers
+    for backend, resident in ((WrappedRAM(), False), (BorrowingRAM(), True)):
+        catalog = CatalogStorageManager(backend, index)
+        repository = ParameterRepository(catalog, index)
+        meta = ParameterMetadata(
+            name="w", ptype=ParameterType.DENSE, model_id=backend.__class__.__name__
+        )
+        proxy = ParameterDataProxy.create_and_store(meta, repository)
+        proxy.set_field("weights", np.array([2.0]))
+        view = repository.create_view()
+        assert view.kernel_inputs_are_resident() is resident
+        sample = proxy.get_field("weights", kernel_input=True)
+        sample[0] = 77.0
+        np.testing.assert_array_equal(
+            proxy.get_field("weights"), [77.0 if resident else 2.0]
+        )
 
 
 def test_proxy_fields_and_cache_prefetch(managers):
@@ -518,3 +458,25 @@ def test_erase_fields(managers):
     make_view(c).erase_fields("bias")
     assert storage.has_field(p1.meta.uid, "bias") is False
     assert storage.has_field(p1.meta.uid, "weights") is True
+
+
+def test_hand_built_parameter_coordinate_is_unique_and_case_sensitive(managers):
+    storage, cache, index = managers
+    repo = ParameterRepository.initialize(storage, index, cache)
+    uid = repo.instances.get_or_create("Net")
+    index.insert_rows(
+        "parameters", [{"uid": "p0", "name": "Weight", "instance_uid": uid}]
+    )
+    other = ParameterMetadata(name="weight", ptype=ParameterType.DENSE, model_id="Net")
+    ParameterDataProxy.create_and_store(other, repo)
+    same = ParameterMetadata(name="Weight", ptype=ParameterType.DENSE, model_id="Net")
+    with pytest.raises(DuplicateParameterError) as error:
+        ParameterDataProxy.create_and_store(same, repo)
+    assert (error.value.instance_uid, error.value.step, error.value.name) == (
+        uid,
+        0,
+        "Weight",
+    )
+    assert isinstance(error.value.__cause__, UniqueConstraintError)
+    assert error.value.__cause__.columns == ("instance_uid", "step", "name")
+    assert sorted(p.meta.name for p in repo) == ["Weight", "weight"]

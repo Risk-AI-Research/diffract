@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Self
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -205,44 +205,39 @@ class TestMetadataPatcher:
             )
 
     def test_patch_conflict_with_force_overwrites(self) -> None:
-        """Existing meta key with force=True should overwrite."""
+        from diffract.core.data.metadata.sqlite_index import SQLiteMetadataIndex
         from diffract.core.data.nn.params.metadata import ParameterMetadata
+        from diffract.core.data.nn.params.proxy import ParameterDataProxy
+        from diffract.core.data.nn.params.repository import ParameterRepository
         from diffract.core.data.nn.params.schema import ParameterType
+        from diffract.core.storage.ram_manager import RAMStorageManager
 
-        patcher = MetadataPatcher()
-
-        # Create a real metadata object since replace() requires dataclass
-        real_meta = ParameterMetadata(
-            uid="uid1",
-            name="test_param",
-            ptype=ParameterType.DENSE,
-            model_id="test_model",
-            other_meta={"existing_key": "old_value"},
-        )
-
-        # Create proxy with real metadata
-        proxy = MagicMock()
-        proxy.meta = real_meta
-        type(proxy).meta = PropertyMock(return_value=real_meta)
-
-        # Create a mock repository with metadata_index
-        mock_metadata_index = MagicMock()
-        mock_repository = MagicMock()
-        mock_repository.metadata_index = mock_metadata_index
-        mock_repository.__enter__ = MagicMock(return_value=mock_repository)
-        mock_repository.__exit__ = MagicMock(return_value=None)
-
-        view = MockParameterView({"uid1": proxy})
-        view._repository = mock_repository
-
-        patcher.patch(
-            updates={"uid1": {"existing_key": "new_value"}},
-            parameters=view,
-            force=True,
-        )
-
-        # Verify metadata_index.upsert was called
-        mock_metadata_index.upsert.assert_called_once()
+        index = SQLiteMetadataIndex(":memory:")
+        try:
+            storage = RAMStorageManager()
+            repo = ParameterRepository.initialize(storage, index)
+            proxy = ParameterDataProxy.create_and_store(
+                ParameterMetadata(
+                    name="weight",
+                    ptype=ParameterType.DENSE,
+                    model_id="model",
+                    step=7,
+                    other_meta={"epoch": 1, "split": "train"},
+                ),
+                repo,
+            )
+            original_instance = proxy.meta.instance_uid
+            MetadataPatcher().patch(
+                updates={proxy.meta.uid: {"epoch": 2}},
+                parameters=repo.create_view(),
+                force=True,
+            )
+            stored = ParameterRepository(storage, index).get_proxy(proxy.meta.uid).meta
+            assert stored == proxy.meta
+            assert (stored.step, stored.instance_uid) == (7, original_instance)
+            assert stored.other_meta == {"epoch": 2, "split": "train"}
+        finally:
+            index.close()
 
 
 class TestResultsEraser:
@@ -253,7 +248,7 @@ class TestResultsEraser:
         registry = MockKernelRegistry(producible_fields={"known_field"})
         eraser = ResultsEraser(kernel_registry=registry)
 
-        with pytest.raises(ResultsEraserError, match="Registry cannot produce"):
+        with pytest.raises(ResultsEraserError, match="nonexistent_field"):
             eraser.resolve_fields_to_erase(
                 ["nonexistent_field"], erase_dependent_also=False
             )
@@ -269,29 +264,24 @@ class TestResultsEraser:
 
         assert "known_field" in result
 
-    def test_erase_escapes_regex_chars(self) -> None:
-        """Field names with regex chars should be escaped."""
-        registry = MockKernelRegistry()
-        eraser = ResultsEraser(kernel_registry=registry)
-        view = MockParameterView()
+    def test_erase_treats_requested_fields_literally(self, ram_container) -> None:
+        """Erase returns the affected owner count and preserves similar field names."""
+        import numpy as np
 
-        eraser.erase(parameters=view, fields={"metric[0]", "loss.total"})
+        from diffract.session import Session
 
-        # Verify patterns are escaped (should contain backslash escapes)
-        assert hasattr(view, "_erased_patterns")
-        patterns = view._erased_patterns
-
-        # Check that special chars are escaped
-        assert any(r"\[0\]" in p for p in patterns)
-        assert any(r"\." in p for p in patterns)
-
-    def test_erase_calls_erase_fields_with_regexp(self) -> None:
-        """Erase should call parameter view with escaped field patterns."""
-        registry = MockKernelRegistry()
-        eraser = ResultsEraser(kernel_registry=registry)
-        view = MockParameterView()
-
-        eraser.erase(parameters=view, fields={"metric"})
-
-        assert hasattr(view, "_erased_patterns")
-        assert view._erased_patterns == ["metric"]
+        with Session(container=ram_container) as session:
+            session.models.add({"w": np.eye(2), "v": np.eye(2)}, model_id="m")
+            repo = ram_container.nn.parameter_repository()
+            proxy, other = (repo.get_proxy(uid) for uid in repo.list_uids())
+            other.set_field("loss.total", 7)
+            for field in ("metric[0]", "metric0", "loss.total", "lossXtotal"):
+                proxy.set_field(field, 1)
+            eraser = ResultsEraser(kernel_registry=MockKernelRegistry())
+            fields = {"metric[0]", "loss.total"}
+            assert eraser.erase(parameters=repo.create_view(), fields=fields) == 2
+            assert eraser.erase(parameters=repo.create_view(), fields=fields) == 0
+            assert proxy.has_field("metric0")
+            assert proxy.has_field("lossXtotal")
+            assert not proxy.has_field("metric[0]")
+            assert not proxy.has_field("loss.total")

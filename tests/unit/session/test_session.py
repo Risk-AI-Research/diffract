@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing
 from pathlib import Path
+from threading import Barrier
+from unittest import TestCase
 
 import numpy as np
 import pytest
@@ -20,7 +26,10 @@ from diffract.core.data.nn.params.proxy import ParameterDataProxy
 from diffract.core.data.nn.params.schema import ParameterType
 from diffract.core.utils import imports as import_utils
 from diffract.session import (
+    DuplicateParameterError,
+    InvalidIdentifierError,
     KernelNotFoundError,
+    ModelAlreadyExistsError,
     ModelNotFoundError,
     Session,
     SessionError,
@@ -829,6 +838,8 @@ def test_session_ingest_aggregates_creates_aggregates(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2"):
+        session.models.add({"layer.weight": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {
@@ -856,6 +867,10 @@ def test_session_ingest_aggregates_canonicalizes_context_order(
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2"):
+        session.models.add(
+            {"a.weight": np.eye(2), "b.weight": np.eye(2)}, model_id=model
+        )
     session.results.ingest_aggregates(
         [
             {
@@ -880,6 +895,8 @@ def test_session_ingest_aggregates_conflict_raises(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {
@@ -910,6 +927,8 @@ def test_session_ingest_aggregates_force_overwrites(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {
@@ -961,6 +980,8 @@ def test_session_erase_results_removes_aggregates(temp_dir: Path) -> None:
 
     session = Session(container=container)
 
+    for model in ("m1", "m2", "m3"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {
@@ -1012,6 +1033,7 @@ def test_session_erase_models_removes_aggregates(temp_dir: Path) -> None:
 
     session = Session(container=container)
 
+    session.models.add({"w": np.eye(2)}, model_id="m3")
     session.results.ingest_aggregates(
         [
             {
@@ -1110,6 +1132,8 @@ def test_session_merge_copies_aggregates(temp_dir: Path) -> None:
 
     WiringConfiguration.wire(container_b)
     session_b = Session(container=container_b)
+    for model in ("m1", "m2"):
+        session_b.models.add({"w": np.eye(2)}, model_id=model)
     session_b.results.ingest_aggregates(
         [
             {
@@ -1141,6 +1165,8 @@ def test_session_list_aggregates_filters_by_field_name(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {"field_name": "l_overlap", "context_models": ("m1", "m2"), "value": 1},
@@ -1160,6 +1186,8 @@ def test_session_list_aggregates_filters_by_model_ids(temp_dir: Path) -> None:
 
     session = Session(container=create_main_container(cfg))
 
+    for model in ("m1", "m2", "m3", "m4"):
+        session.models.add({"w": np.eye(2)}, model_id=model)
     session.results.ingest_aggregates(
         [
             {"field_name": "overlap", "context_models": ("m1", "m2"), "value": 1},
@@ -1263,3 +1291,603 @@ def test_filtered_export_does_not_corrupt_list_verbose(temp_dir: Path) -> None:
     # The out-of-scope parameter must still report its real computed field.
     assert "scope_sum" in rows["pb"]["available_fields"]
     assert "scope_sum" in rows["pa"]["available_fields"]
+
+
+def test_global_model_list_and_rename_touch_only_instances(temp_dir: Path) -> None:
+    cfg = temp_dir / "identity.ini"
+    _write_ram_config(cfg)
+    cfg.write_text(
+        cfg.read_text().replace(
+            "backend = ram",
+            f"backend = sqlite\n\n[storage.sqlite]\npath = {temp_dir / 'values.db'}",
+        )
+    )
+    container = create_main_container(cfg)
+    session = Session(container=container)
+    weights = np.arange(6, dtype=float).reshape(2, 3)
+    with session:
+        session.models.add({"a": weights, "b": weights + 1}, model_id="Encoder")
+        session.results.ingest_aggregates(
+            [
+                {
+                    "field_name": "summary",
+                    "context_models": ("Encoder",),
+                    "value": np.ones((2, 2)),
+                }
+            ]
+        )
+        repo = container.nn.parameter_repository()
+        before = {p.meta.name: p.meta.uid for p in repo}
+        instance = repo.instances.get_by_name("Encoder")
+        connection = repo.metadata_index._conn
+        reads = []
+        writes = []
+
+        def track(action, table, column, database, trigger):
+            if action == sqlite3.SQLITE_READ:
+                reads.append(table)
+            if action in (
+                sqlite3.SQLITE_UPDATE,
+                sqlite3.SQLITE_INSERT,
+                sqlite3.SQLITE_DELETE,
+            ):
+                writes.append((action, table))
+            return sqlite3.SQLITE_OK
+
+        changes = connection.total_changes
+        connection.set_authorizer(track)
+        try:
+            assert session.models.list() == ["Encoder"]
+            assert "instances" in reads
+            assert "parameters" not in reads
+            session.models.rename("Encoder", "encoder")
+        finally:
+            connection.set_authorizer(None)
+        assert connection.total_changes - changes == 1
+        assert writes == [(sqlite3.SQLITE_UPDATE, "instances")]
+        assert (
+            repo.instances.get_by_name("encoder").instance_uid == instance.instance_uid
+        )
+        assert {p.meta.model_id for p in repo} == {"encoder"}
+
+    other = create_main_container(cfg)
+    reopened = Session(container=other)
+    assert reopened.filter(model_ids=["Encoder"]).models.list() == []
+    assert reopened.filter(model_ids=["re:enc.*"]).models.list() == ["encoder"]
+    assert {p["name"]: p["uid"] for p in reopened.models.parameters.list()} == before
+    with reopened:
+        for proxy in other.nn.parameter_repository():
+            np.testing.assert_array_equal(
+                proxy.get_field(WEIGHTS_FIELD), weights + (proxy.meta.name == "b")
+            )
+
+
+def test_concurrent_model_admission_keeps_one_complete_model(temp_dir: Path) -> None:
+    cfg = temp_dir / "race.ini"
+    _write_ram_config(cfg)
+    first = Session(container=create_main_container(cfg))
+    second = Session(container=create_main_container(cfg))
+    ready = Barrier(2)
+
+    def add(session, name):
+        ready.wait(timeout=10)
+        try:
+            session.models.add({name: np.ones((2, 2))}, model_id="shared")
+        except ModelAlreadyExistsError:
+            return None
+        return name
+
+    with first, second, ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(add, (first, second), ("left", "right")))
+    assert results.count(None) == 1
+    (winner,) = [name for name in results if name is not None]
+    reopened = Session(container=create_main_container(cfg))
+    assert reopened.models.list() == ["shared"]
+    assert [p["name"] for p in reopened.models.parameters.list()] == [winner]
+
+
+def _admit_checkpoint_from_process(marker, pipe):
+    with pipe, Session(profile="local") as session:
+        pipe.send("ready")
+        assert pipe.recv() == "add"
+        try:
+            session.models.add(
+                {"shared": np.eye(3) * marker, f"from{marker}": np.eye(3) + marker},
+                model_id="model",
+                step=4,
+                display_label=f"writer {marker}",
+            )
+        except ModelAlreadyExistsError:
+            pipe.send(None)
+        else:
+            pipe.send(marker)
+
+
+def test_processes_racing_on_one_coordinate_publish_one_checkpoint(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with Session(profile="local") as original:
+        original.models.add({"shared": np.eye(3)}, model_id="model")
+    spawn = multiprocessing.get_context("spawn")
+    with ExitStack() as stack:
+        pipes = []
+        workers = []
+        for value in (2, 7):
+            parent, child = spawn.Pipe()
+            pipes.append(stack.enter_context(parent))
+            with child:
+                proc = spawn.Process(
+                    target=_admit_checkpoint_from_process, args=(value, child)
+                )
+                proc.start()
+            workers.append(proc)
+            stack.callback(proc.join)
+            stack.callback(proc.terminate)
+        for pipe in pipes:
+            assert pipe.poll(30)
+            assert pipe.recv() == "ready"
+        for pipe in pipes:
+            pipe.send("add")
+        outcomes = []
+        for pipe in pipes:
+            assert pipe.poll(30)
+            outcomes.append(pipe.recv())
+        for proc in workers:
+            proc.join(timeout=30)
+            assert proc.exitcode == 0
+    assert outcomes.count(None) == 1
+    (winner,) = [m for m in outcomes if m is not None]
+    with Session(profile="local") as reopened:
+        rows = reopened.results.export_metrics(WEIGHTS_FIELD, export_format="dict")
+        fields = {
+            (p["step"], p["name"], p["step_label"]): rows[p["uid"]]["fields"][
+                WEIGHTS_FIELD
+            ]
+            for p in reopened.models.parameters.list(verbose=True)
+        }
+        label = f"writer {winner}"
+        assert fields.keys() == {
+            (0, "shared", None),
+            (4, "shared", label),
+            (4, f"from{winner}", label),
+        }
+        np.testing.assert_array_equal(fields[0, "shared", None], np.eye(3))
+        np.testing.assert_array_equal(fields[4, "shared", label], np.eye(3) * winner)
+        np.testing.assert_array_equal(
+            fields[4, f"from{winner}", label], np.eye(3) + winner
+        )
+
+    expected = {(uid, WEIGHTS_FIELD) for uid in rows}
+    root = tmp_path / ".diffract" / "sqlite"
+    with closing(
+        sqlite3.connect((root / "metadata_index.db").as_uri() + "?mode=ro", uri=True)
+    ) as db:
+        assert set(db.execute("SELECT obj_uid,field FROM field_values")) == expected
+    with closing(
+        sqlite3.connect((root / "sqlite_storage.db").as_uri() + "?mode=ro", uri=True)
+    ) as db:
+        assert set(db.execute("SELECT table_name,obj_uid,field FROM storage")) == {
+            ("", uid, field) for uid, field in expected
+        }
+
+
+def test_empty_add_and_scoped_erase_preserve_instance_lifetime(temp_dir: Path) -> None:
+    cfg = temp_dir / "lifetime.ini"
+    _write_ram_config(cfg)
+    session = Session(container=create_main_container(cfg))
+    with pytest.raises(SessionError, match="produced no parameters"):
+        session.models.add({"a": np.ones(1)}, model_id="net")
+    assert session.models.list() == []
+    session.models.add({"a": np.eye(2), "b": np.eye(2)}, model_id="net")
+    session.filter(param_names=["a"]).models.erase("net")
+    assert session.models.list() == ["net"]
+    assert [p["name"] for p in session.models.parameters.list()] == ["b"]
+    session.models.erase("net")
+    assert session.models.list() == []
+
+
+def test_merge_by_coordinate_preserves_target_uid_and_verified_fields(
+    temp_dir: Path,
+) -> None:
+    src_cfg = temp_dir / "source.ini"
+    dst_cfg = temp_dir / "target.ini"
+    _write_ram_config(src_cfg)
+    _write_ram_config(dst_cfg)
+    src = Session(config_path=src_cfg)
+    dst_container = create_main_container(dst_cfg)
+    dst = Session(container=dst_container)
+    with src, dst:
+        src.models.add({"w": np.eye(2) * 3}, model_id="a")
+        dst.models.add({"w": np.eye(2)}, model_id="a")
+        source_uid = src.models.parameters.list()[0]["uid"]
+        target_uid = dst.models.parameters.list()[0]["uid"]
+        assert source_uid != target_uid
+        assert len(bytes.fromhex(target_uid)) == 16
+        target = dst_container.nn.parameter_repository()
+        dst.utils.merge_other_session(src, verify=True)
+        np.testing.assert_array_equal(
+            target.get_proxy(target_uid).get_field(WEIGHTS_FIELD), np.eye(2)
+        )
+        for _ in range(2):
+            dst.utils.merge_other_session(src, verify=False)
+        assert [p["uid"] for p in dst.models.parameters.list()] == [target_uid]
+        np.testing.assert_array_equal(
+            target.get_proxy(target_uid).get_field(WEIGHTS_FIELD), np.eye(2) * 3
+        )
+
+
+def test_wrapped_parameter_coordinates_and_provenance(temp_dir: Path) -> None:
+    cfg = temp_dir / "names.ini"
+    _write_ram_config(cfg)
+    container = create_main_container(cfg)
+    session = Session(container=container)
+    raw = "module._orig_mod._fsdp_wrapped_module._checkpoint_wrapped_module.0.weight"
+    with session, TestCase().assertLogs("diffract", level="INFO") as logs:
+        session.models.add(
+            {
+                "net._extra_state": {"epoch": 4},
+                raw: np.ones((2, 2)),
+                "net.module.weight": np.zeros((2, 2)),
+                "0.Weight": np.eye(2),
+            },
+            model_id="Net",
+        )
+        params = {p.meta.name: p.meta for p in container.nn.parameter_repository()}
+        assert set(params) == {"0.weight", "net.module.weight", "0.Weight"}
+        assert params["0.weight"].other_meta["in_model_idx"] == 1
+        assert params["0.weight"].other_meta["raw_name"] == raw
+        assert {p.other_meta["extractor"] for p in params.values()} == {
+            "NumpyDictExtractor"
+        }
+        assert "net._extra_state" in "\n".join(logs.output)
+        assert "Stripped wrapper prefixes" in "\n".join(logs.output)
+
+
+def test_normalized_collision_reports_coordinate_and_rolls_back(temp_dir: Path) -> None:
+    cfg = temp_dir / "collision.ini"
+    _write_ram_config(cfg)
+    container = create_main_container(cfg)
+    session = Session(container=container)
+    with session:
+        with pytest.raises(DuplicateParameterError) as caught:
+            session.models.add(
+                {"module.weight": np.ones((2, 2)), "weight": np.eye(2)}, model_id="A"
+            )
+        assert caught.value.name == "weight"
+        assert caught.value.step == 0
+        assert len(caught.value.instance_uid) == 32
+        assert caught.value.instance_uid in str(caught.value)
+        assert session.models.list() == []
+        assert session.models.parameters.list() == []
+        assert (
+            container.storage.storage_manager().list_objs(table=TABLE_PARAMETERS) == []
+        )
+        session.models.add({"weight": np.eye(2)}, model_id="A")
+
+
+@pytest.mark.parametrize("name", [".root", "a..weight", "trailing.", "module..w"])
+def test_rejects_empty_tensor_path_components(temp_dir: Path, name: str) -> None:
+    cfg = temp_dir / "empty-name.ini"
+    _write_ram_config(cfg)
+    session = Session(container=create_main_container(cfg))
+    with pytest.raises(InvalidIdentifierError, match="empty path component"):
+        session.models.add({name: np.eye(2)}, model_id="A")
+    assert session.models.list() == []
+
+
+def test_nested_scopes_keep_their_own_session_after_a_second_session_opens():
+    target_config = create_main_container(profile="ram")
+    target_config.export.config.default_export_format.override("dict")
+    with Session(container=target_config) as target:
+        target.models.add(
+            {"w": np.eye(4, dtype=np.float32)}, model_id="same", display_label="first"
+        )
+        donor_config = create_main_container(profile="ram")
+        donor_config.export.config.default_export_format.override("list")
+        with Session(container=donor_config) as donor:
+            donor.models.add(
+                {"w": 3 * np.eye(4, dtype=np.float32)},
+                model_id="same",
+                display_label="second",
+            )
+            with target as reentered:
+                assert reentered is target
+            scope = target.filter(model_ids=["same"])
+            with scope as scoped:
+                assert scoped is scope
+                scoped.compute.apply("param_norm")
+                (aggregate,) = scoped.results.export_aggregates(
+                    "param_norm", export_format="list"
+                )
+                assert aggregate["value"] == pytest.approx(4)
+                with scoped.filter(param_names=["w"]) as nested:
+                    (param,) = nested.models.parameters.list(verbose=True)
+                    assert param["uid"] == target.models.parameters.list()[0]["uid"]
+                    assert param["step_label"] == "first"
+                    nested.results.ingest_metrics({param["uid"]: {"observed": 17}})
+                    nested.results.ingest_aggregates(
+                        [
+                            {
+                                "field_name": "stored_summary",
+                                "context_models": ("same",),
+                                "context_params": ("w",),
+                                "value": 27,
+                            }
+                        ]
+                    )
+                    (stored,) = target.results.export_aggregates(
+                        "stored_summary", export_format="list"
+                    )
+                    assert stored["value"] == 27
+                    values = nested.results.export_metrics("observed")
+                    assert values[param["uid"]]["fields"]["observed"] == 17
+            assert (
+                "observed"
+                not in donor.models.parameters.list(verbose=True)[0]["available_fields"]
+            )
+            assert (
+                donor.results.export_aggregates("param_norm", export_format="list")
+                == []
+            )
+            donor.compute.apply("param_norm")
+            (aggregate,) = donor.results.export_aggregates(
+                "param_norm", export_format="list"
+            )
+            assert aggregate["value"] == pytest.approx(36)
+
+
+def test_reapply_repairs_one_partial_svd_without_rewriting_complete_parameters():
+    with Session(profile="ram") as session:
+        weights = np.diag(np.array([6.0, 3.0, 1.0], dtype=np.float32))
+        session.models.add({"left": weights, "right": weights * 2}, model_id="net")
+        session.compute.apply("weights_svals")
+        (right,) = session.filter(param_names=["right"]).models.parameters.list()
+        session.results.ingest_metrics(
+            {right["uid"]: {"weights_svals": np.array([11.0, 12.0, 13.0])}}, force=True
+        )
+        left = session.filter(param_names=["left"])
+        summary = left.results.erase("weights_svals")
+        assert summary.fields == ("weights_lsvs", "weights_rsvs", "weights_svals")
+        assert summary.affected_uids == 1
+        (parameter,) = left.models.parameters.list(verbose=True)
+        assert not set(summary.fields).intersection(parameter["available_fields"])
+        present = session.results.export_metrics("weights_svals", export_format="dict")
+        assert [
+            r["metadata"]["name"]
+            for r in present.values()
+            if "weights_svals" in r["fields"]
+        ] == ["right"]
+        session.compute.apply("weights_svals")
+        repaired = session.results.export_metrics("weights_svals", export_format="dict")
+        values = {
+            r["metadata"]["name"]: r["fields"]["weights_svals"]
+            for r in repaired.values()
+        }
+        np.testing.assert_allclose(values["left"], [1, 3, 6])
+        np.testing.assert_allclose(values["right"], [11, 12, 13])
+
+
+def test_results_erase_accepts_ingested_fields_and_lists_stored_names():
+    from diffract.session import FieldNotFoundError
+
+    with Session(profile="ram") as session:
+        session.models.add({"w": np.eye(2)}, model_id="net")
+        (parameter,) = session.models.parameters.list()
+        session.results.ingest_metrics({parameter["uid"]: {"observed_loss": 3}})
+
+        with pytest.raises(FieldNotFoundError, match="Did you mean: observed_loss"):
+            session.results.erase("observed_los")
+
+        summary = session.results.erase("observed_loss")
+        assert summary.fields == ("observed_loss",)
+        assert summary.affected_uids == 1
+        assert session.results.erase("weights").fields == ("weights",)
+        session.results.ingest_metrics({parameter["uid"]: {"score": 9}})
+        summary = session.results.erase(erase_all=True)
+        assert summary.fields == ("score",)
+        assert summary.affected_uids == 1
+        (parameter,) = session.models.parameters.list(verbose=True)
+        assert not parameter["available_fields"]
+
+
+def test_results_erase_keeps_other_aggregate_groups():
+    from diffract.core.compute import KernelApplyLevel
+
+    with Session(profile="ram") as session:
+        session.models.add({"w": np.eye(2)}, model_id="first")
+        session.models.add({"w": np.eye(3)}, model_id="second")
+
+        @session.compute.kernel(
+            require_fields=("weights",),
+            produce_fields=("group_sum", "group_negated_sum"),
+            apply_level=KernelApplyLevel.IN_MODEL,
+        )
+        def aggregate_pair(weights: list[np.ndarray]) -> tuple[float, float]:
+            total = sum(float(value.sum()) for value in weights)
+            return total, -total
+
+        session.compute.apply("group_sum")
+        first = session.filter(model_ids=["first"])
+        summary = first.results.erase("group_sum")
+        assert summary.fields == ("group_negated_sum", "group_sum")
+        rows = session.results.export_aggregates(
+            "group_sum", "group_negated_sum", export_format="list"
+        )
+        assert {
+            (row["field"], tuple(row["context_models"]), row["value"]) for row in rows
+        } == {
+            ("group_sum", ("second",), 3.0),
+            ("group_negated_sum", ("second",), -3.0),
+        }
+        first.compute.apply("group_sum")
+        rows = first.results.export_aggregates(
+            "group_sum", "group_negated_sum", export_format="list"
+        )
+        assert {row["field"]: row["value"] for row in rows} == {
+            "group_sum": 2.0,
+            "group_negated_sum": -2.0,
+        }
+
+
+@pytest.mark.parametrize("bulk", [True, False])
+def test_export_reflects_another_sessions_new_erased_and_overwritten_fields(
+    tmp_path, monkeypatch, bulk
+):
+    from diffract.core.storage.catalog_manager import CatalogStorageManager
+
+    if not bulk:
+        monkeypatch.setattr(CatalogStorageManager, "live_pointers", None)
+    monkeypatch.chdir(tmp_path)
+    with Session(profile="local") as reader:
+        reader.models.add({"a": np.eye(3), "b": np.eye(3)}, model_id="m")
+        ids = {p["name"]: p["uid"] for p in reader.models.parameters.list()}
+        reader.results.ingest_metrics(
+            {ids["a"]: {"frob_norm": 1}, ids["b"]: {"frob_norm": 2}}
+        )
+        reader.results.ingest_metrics({uid: {"observed": 5} for uid in ids.values()})
+        reader.models.parameters.list(verbose=True)
+        first = reader.results.export_metrics("frob_norm", export_format="dict")
+        assert first[ids["a"]]["fields"]["frob_norm"] == 1
+        second = create_main_container(profile="local")
+        with Session(container=second) as writer:
+            writer.filter(param_names=["a"]).results.erase("frob_norm")
+            second.nn.parameter_repository().get_proxy(ids["a"]).erase_field("observed")
+            writer.results.ingest_metrics(
+                {ids["a"]: {"imported": 7}, ids["b"]: {"frob_norm": 9}}, force=True
+            )
+            refreshed = reader.results.export_metrics(
+                "frob_norm", "imported", export_format="dict"
+            )
+            assert refreshed[ids["a"]]["fields"] == {"imported": 7}
+            assert refreshed[ids["b"]]["fields"] == {"frob_norm": 9}
+            with pytest.raises(KernelNotFoundError, match="observed"):
+                reader.filter(param_names=["a"]).results.export_metrics("observed")
+
+
+def test_catalog_export_reads_only_current_members_of_the_view(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    container = create_main_container(profile="local")
+    with Session(container=container) as session:
+        session.models.add({"a": np.eye(2)}, model_id="one")
+        (a,) = session.models.parameters.list()
+        repo = container.nn.parameter_repository()
+        earlier = repo.create_view()
+        assert earlier.list_uids() == [a["uid"]]
+        session.models.add({"b": np.eye(2)}, model_id="two")
+        (b,) = session.filter(model_ids=["two"]).models.parameters.list()
+        session.results.ingest_metrics({a["uid"]: {"score": 3}, b["uid"]: {"score": 4}})
+        repo.storage_manager.set_field("0" * 32, "score", 99, table=TABLE_PARAMETERS)
+        statements = []
+        repo.metadata_index._conn.set_trace_callback(statements.append)
+
+        def catalog_query():
+            (selection,) = [sql for sql in statements if "live_field_values" in sql]
+            statements.clear()
+            return selection
+
+        rows = session.results.export_metrics("score", export_format="dict")
+        assert {uid: row["fields"] for uid, row in rows.items()} == {
+            a["uid"]: {"score": 3},
+            b["uid"]: {"score": 4},
+        }
+        full = catalog_query()
+        assert a["uid"] not in full
+        assert b["uid"] not in full
+        assert earlier.read_catalog_fields(("score",)) == {a["uid"]: {"score": 3}}
+        snapshot = catalog_query()
+        assert a["uid"] in snapshot
+        assert b["uid"] not in snapshot
+        selected = session.filter(model_ids=["two"]).results.export_metrics("score")
+        assert {uid: r["fields"] for uid, r in selected.items()} == {
+            b["uid"]: {"score": 4}
+        }
+        scoped = catalog_query()
+        assert b["uid"] in scoped
+        assert a["uid"] not in scoped
+        repo.metadata_index._conn.set_trace_callback(None)
+
+
+def test_derived_catalog_keeps_its_owner_selection_contract(tmp_path, monkeypatch):
+    from diffract.core.storage.catalog_manager import CatalogStorageManager
+
+    class SelectedCatalog(CatalogStorageManager):
+        def live_pointers(self, uids, fields, *, table):
+            return super().live_pointers(
+                tuple(dict.fromkeys(uids)), fields, table=table
+            )
+
+    monkeypatch.chdir(tmp_path)
+    container = create_main_container(profile="local")
+    with Session(container=container) as session:
+        repo = container.nn.parameter_repository()
+        native = repo.storage_manager
+        selected = SelectedCatalog(native.backend, native.catalog.index)
+        monkeypatch.setattr(repo, "_storage_manager", selected)
+        session.models.add({"weights": np.eye(3)}, model_id="network")
+        (param,) = session.models.parameters.list()
+        session.results.ingest_metrics({param["uid"]: {"observed": 12}})
+        rows = session.results.export_metrics("observed", export_format="dict")
+        assert rows[param["uid"]]["fields"] == {"observed": 12}
+
+
+def test_direct_exporter_resolves_individual_revisions_with_warm_field_cache(
+    tmp_path, monkeypatch
+):
+    from diffract.core.export.exporters import ResultExporter
+    from diffract.core.export.formatters.dict_formatter import DictFormatter
+    from diffract.core.storage.catalog_manager import CatalogStorageManager
+    from diffract.session.field_cache import SessionFieldCache
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(CatalogStorageManager, "live_pointers", None)
+    container = create_main_container(profile="local")
+    with Session(container=container) as reader:
+        reader.models.add({"a": np.eye(3)}, model_id="m")
+        (param,) = reader.models.parameters.list()
+        uid = param["uid"]
+        reader.results.ingest_metrics({uid: {"first": 7}})
+        view = container.nn.parameter_repository().create_view()
+        cache = SessionFieldCache()
+        cache.set({uid: ["first"]})
+
+        def export():
+            return (
+                ResultExporter()
+                .export_results(
+                    "first",
+                    "second",
+                    parameters=view,
+                    formatter=DictFormatter(),
+                    field_cache=cache,
+                )
+                .scalars[uid]["fields"]
+            )
+
+        assert export() == {"first": 7}
+        other = create_main_container(profile="local")
+        with Session(container=other) as writer:
+            other.nn.parameter_repository().get_proxy(uid).erase_field("first")
+            writer.results.ingest_metrics({uid: {"second": 9}})
+            assert export() == {"second": 9}
+
+
+def test_export_uses_durable_value_when_optional_cache_write_fails(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    container = create_main_container(profile="local")
+    with Session(container=container) as session:
+        session.models.add({"a": np.eye(3)}, model_id="m")
+        (param,) = session.models.parameters.list()
+        uid = param["uid"]
+        session.results.ingest_metrics({uid: {"observed": 41}})
+        cache = container.nn.parameter_repository().cache_manager
+        cache.erase_field(uid, "observed")
+
+        def unavailable(*args, **kwargs):
+            raise OSError("cache unavailable")
+
+        monkeypatch.setattr(cache, "set_field", unavailable)
+        actual = session.results.export_metrics("observed", export_format="dict")
+        assert actual[uid]["fields"] == {"observed": 41}

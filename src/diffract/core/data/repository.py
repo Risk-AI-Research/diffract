@@ -7,16 +7,19 @@ for different data types (parameters, relations, etc.).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
+from contextlib import ExitStack
+from threading import local
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, TypeVar
 
 from diffract.core.parallel import ParallelContext
 from diffract.core.storage.interface import DEFAULT_TABLE
 
+from .interface import IDataProxy, IDataRepository, IMetadata
 from .view import DataView
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Iterable, Iterator, Sequence
 
     from diffract.core.cache.interface import ICacheManager
     from diffract.core.data.metadata.interface import IMetadataIndex
@@ -28,7 +31,13 @@ TProxy = TypeVar("TProxy")
 logger = logging.getLogger(__name__)
 
 
-class DataRepository[TMetadata, TProxy]:
+class _ProxyFactory[Metadata, Proxy, Repository](Protocol):
+    def __call__(self, *, meta: Metadata, _repository: Repository) -> Proxy: ...
+
+
+class DataRepository[TMetadata: IMetadata, TProxy: IDataProxy](
+    IDataRepository[TMetadata, TProxy]
+):
     """Generic repository owning storage/cache/metadata and managing entity membership.
 
     Provides the infrastructure for persistent storage, metadata indexing, and
@@ -42,7 +51,7 @@ class DataRepository[TMetadata, TProxy]:
 
     # Override in subclasses
     METADATA_CLASS: type[TMetadata]
-    PROXY_CLASS: type[TProxy]
+    PROXY_CLASS: _ProxyFactory[TMetadata, TProxy, Self]
     VIEW_CLASS: type[DataView[TMetadata, TProxy]]
     TABLE: str = DEFAULT_TABLE
 
@@ -56,6 +65,7 @@ class DataRepository[TMetadata, TProxy]:
         metadata_index: IMetadataIndex,
         cache_manager: ICacheManager | None = None,
     ) -> None:
+        self._local = local()
         self._storage_manager = storage_manager
         self._metadata_index = metadata_index
         self._cache_manager = cache_manager
@@ -78,8 +88,14 @@ class DataRepository[TMetadata, TProxy]:
 
     def __enter__(self) -> Self:
         """Enter batch write context for repository storage."""
-        self._storage_manager.__enter__()
-        self._metadata_index.__enter__()
+        with ExitStack() as stack:
+            catalog = getattr(self._storage_manager, "catalog", None)
+            if catalog is None or catalog.index is not self._metadata_index:
+                stack.enter_context(self._metadata_index)
+            stack.enter_context(self._storage_manager)
+            if not hasattr(self._local, "batches"):
+                self._local.batches = []
+            self._local.batches.append(stack.pop_all())
         return self
 
     def __exit__(
@@ -89,8 +105,7 @@ class DataRepository[TMetadata, TProxy]:
         exc_tb: types.TracebackType | None,
     ) -> None:
         """Exit batch write context for repository storage."""
-        self._metadata_index.__exit__(exc_type, exc_val, exc_tb)
-        self._storage_manager.__exit__(exc_type, exc_val, exc_tb)
+        self._local.batches.pop().__exit__(exc_type, exc_val, exc_tb)
 
     def __len__(self) -> int:
         """Return number of entities in the repository."""
@@ -106,7 +121,7 @@ class DataRepository[TMetadata, TProxy]:
         uids = self._metadata_index.list_uids(self.TABLE)
         return self.get_proxy(uids[index])
 
-    def get_proxy(self, uid: str) -> TProxy:
+    def get_proxy(self: Self, uid: str) -> TProxy:
         """Return entity proxy by uid with lazy loading."""
         if uid in self._proxy_cache:
             return self._proxy_cache[uid]
@@ -115,10 +130,13 @@ class DataRepository[TMetadata, TProxy]:
         if meta_dict is None:
             raise KeyError(f"Entity with uid '{uid}' not found in {self.TABLE}")
 
-        meta = self.METADATA_CLASS.from_dict(meta_dict)
+        meta = self._decode_metadata(meta_dict)
         proxy = self.PROXY_CLASS(meta=meta, _repository=self)
         self._proxy_cache[uid] = proxy
         return proxy
+
+    def _decode_metadata(self, row: dict[str, Any]) -> TMetadata:
+        return self.METADATA_CLASS.from_dict(row)
 
     def has_uid(self, uid: str) -> bool:
         """Check if entity with given uid exists."""
@@ -132,6 +150,53 @@ class DataRepository[TMetadata, TProxy]:
         """Add multiple entity proxies to repository cache."""
         for proxy in proxies:
             self.append(proxy)
+
+    def erase_values(
+        self, uids: Sequence[str], fields: Sequence[str] | None = None
+    ) -> int:
+        """Erase selected fields and count the owners that lost data."""
+        return len({uid for uid, _ in self._erase_value_pairs(uids, fields)})
+
+    def erase_result_groups(
+        self, uids: Sequence[str], fields: Sequence[str] | None = None
+    ) -> list[tuple[str, str]]:
+        """Erase complete result groups and return the owner and field pairs."""
+        return self._erase_value_pairs(uids, fields, result_groups=True)
+
+    def _erase_value_pairs(
+        self,
+        uids: Sequence[str],
+        fields: Sequence[str] | None,
+        *,
+        result_groups: bool = False,
+    ) -> list[tuple[str, str]]:
+        erase = (
+            getattr(self.storage_manager, "erase_result_groups", None)
+            if result_groups
+            else None
+        )
+        if erase is None:
+            erase = getattr(self.storage_manager, "erase_selection", None)
+        if erase is not None:
+            changed = erase(self.TABLE, uids, fields)
+        else:
+            changed = []
+            for uid in uids:
+                for field in self.storage_manager.list_fields(uid, table=self.TABLE):
+                    if fields is None or field in fields:
+                        self.storage_manager.erase_field(uid, field, table=self.TABLE)
+                        changed.append((uid, field))
+        if self.cache_manager is not None:
+            for uid, field in changed:
+                self.cache_manager.erase_field(uid, field)
+        return changed
+
+    def remove_membership(self, uids: Sequence[str]) -> int:
+        """Delete metadata for a set of owners and evict their cached proxies."""
+        removed = self.metadata_index.delete_rows(self.TABLE, where_in={"uid": uids})
+        for uid in uids:
+            self._proxy_cache.pop(uid, None)
+        return removed
 
     def remove_by_uid(self, uid: str) -> None:
         """Remove an entity from repository by uid."""
@@ -181,7 +246,7 @@ class DataRepository[TMetadata, TProxy]:
         return self._metadata_index.list_uids(self.TABLE)
 
     def prefetch_proxies(
-        self,
+        self: Self,
         uids: list[str],
         parallel: ParallelContext | None = None,
     ) -> None:
@@ -194,7 +259,7 @@ class DataRepository[TMetadata, TProxy]:
 
         for uid, meta_dict in zip(uids_to_load, meta_batch, strict=True):
             if meta_dict is not None:
-                meta = self.METADATA_CLASS.from_dict(meta_dict)
+                meta = self._decode_metadata(meta_dict)
                 self._proxy_cache[uid] = self.PROXY_CLASS(meta=meta, _repository=self)
 
     @classmethod

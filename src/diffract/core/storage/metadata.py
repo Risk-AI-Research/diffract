@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 
 import numpy as np
@@ -27,7 +28,13 @@ class ValueMetadata:
 
     def to_jsonable(self) -> dict[str, Any]:
         """Convert metadata to JSON-serializable dictionary."""
-        return asdict(self)
+        return {
+            "kind": self.kind,
+            "dtype": self.dtype,
+            "shape": self.shape,
+            "ndim": self.ndim,
+            "is_numeric": self.is_numeric,
+        }
 
     @classmethod
     def from_jsonable(cls, data: dict[str, Any]) -> ValueMetadata:
@@ -51,6 +58,11 @@ def _kind_from_ndim(ndim: int) -> Kind:
     return "ndarray"
 
 
+@lru_cache(maxsize=128)
+def _dtype_metadata(dtype: np.dtype) -> tuple[str, bool]:
+    return str(dtype), bool(np.issubdtype(dtype, np.number))
+
+
 def infer_value_metadata(value: Any) -> ValueMetadata:
     """Infer basic metadata for a value that will be stored.
 
@@ -58,13 +70,14 @@ def infer_value_metadata(value: Any) -> ValueMetadata:
     purposes.
     """
     if isinstance(value, np.ndarray):
-        ndim = int(value.ndim)
+        ndim = value.ndim
+        dtype, is_numeric = _dtype_metadata(value.dtype)
         return ValueMetadata(
             kind=_kind_from_ndim(ndim),
-            dtype=str(value.dtype),
-            shape=tuple(int(x) for x in value.shape),
+            dtype=dtype,
+            shape=value.shape,
             ndim=ndim,
-            is_numeric=bool(np.issubdtype(value.dtype, np.number)),
+            is_numeric=is_numeric,
         )
 
     if isinstance(value, (int, float, bool, complex, np.generic)):

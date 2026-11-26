@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -9,7 +10,12 @@ from .config import KernelConfig
 from .execution import KernelApplyLevel, KernelExecutionProtocol, KernelRestrictions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from .config import OutputComparison
+
+
+type ExecutionBinding = Callable[
+    [dict[str, Any]], tuple[dict[str, str], Callable[..., Any]]
+]
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,9 @@ class KernelMetadata:
         restrictions: Optional execution restrictions.
         config: Configuration parameters with defaults.
         info: Optional documentation metadata.
+        version: Explicit revision of the kernel behavior.
+        output_comparison: Optional override of scalar output equivalence.
+        stream_inputs: Load one parameter's arguments at a time within a batch.
     """
 
     name: str
@@ -61,6 +70,12 @@ class KernelMetadata:
     restrictions: KernelRestrictions | None
     config: KernelConfig
     info: KernelInfo
+    symmetric: bool | None = None
+    version: str = "1"
+    output_comparison: OutputComparison | None = None
+    stream_inputs: bool = False
+    bind_execution: ExecutionBinding | None = None
+    builtin: bool = False
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         """Return string representation for debugging and logging."""

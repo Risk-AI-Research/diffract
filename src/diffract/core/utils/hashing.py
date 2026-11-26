@@ -1,19 +1,18 @@
 """Hash utilities for short deterministic identifiers.
 
 Provides utilities to create short hexadecimal hashes from strings or generic
-objects via JSON serialization with fallbacks, plus a convenience unique
-ID generator based on current time in nanoseconds.
+objects via JSON serialization with fallbacks, plus random entity IDs.
 """
 
 from __future__ import annotations
 
 import json
-import time
 import zlib
 from collections.abc import Iterable
 from typing import Any
+from uuid import uuid4
 
-__all__ = ["HashUtils", "get_unique_id"]
+__all__ = ["HashUtils", "get_unique_id", "new_entity_uid"]
 
 
 class HashUtils:
@@ -76,15 +75,11 @@ class HashUtils:
         return cls._str_hash(cls._prepare_data(data))
 
 
+def new_entity_uid() -> str:
+    """Mint a persistent entity identifier as 32 lowercase hexadecimal digits."""
+    return uuid4().hex
+
+
 def get_unique_id() -> str:
-    """Generate a unique ID using current time in nanoseconds.
-
-    Returns:
-        8-character hexadecimal string based on current timestamp.
-
-    Example:
-        >>> uid = get_unique_id()
-        >>> len(uid)
-        8
-    """
-    return HashUtils.get_obj_hash(time.time_ns())
+    """Return a random, 32-character entity identifier."""
+    return new_entity_uid()

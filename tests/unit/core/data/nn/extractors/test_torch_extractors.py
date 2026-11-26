@@ -42,6 +42,9 @@ def test_torch_module_extractor_linear_only(
     params = list(repo.create_view())
 
     assert len(params) == 2
+    # Names are the state_dict paths of the extracted weight tensors, so the
+    # module view matches a state_dict view of the same network.
+    assert sorted(p.meta.name for p in params) == ["0.weight", "2.weight"]
     for proxy in params:
         assert proxy.meta.ptype == ParameterType.DENSE
         w = proxy.get_field("weights")
@@ -82,7 +85,7 @@ def test_overrides_change_name_and_type(
         overrides=ExtractorOverrides(
             model_id="fixed-model",
             parameter_overrides={
-                "": ExtractorOverrides.ParameterOverrides(
+                "weight": ExtractorOverrides.ParameterOverrides(
                     name="dense0_weight",
                     ptype="DENSE",  # string override path
                 )

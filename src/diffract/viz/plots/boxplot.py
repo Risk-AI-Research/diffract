@@ -18,7 +18,6 @@ from diffract.viz.plots.base.plot import Plot
 from diffract.viz.styling import (
     CategoricalPropertyResolver,
     NumericPropertyResolver,
-    ResolvedColor,
 )
 
 
@@ -190,7 +189,9 @@ class BoxPlot(
         if self.title:
             fig.update_layout(title=self.title)
         else:
-            fig.update_layout(title=f"{self.y.field} by {self.x.field}")
+            fig.update_layout(
+                title=f"{self._field_label(self.y)} by {self._field_label(self.x)}"
+            )
 
         categoryorder = self.x_categoryorder or "array"
 
@@ -253,31 +254,3 @@ class BoxPlot(
             if str(x_val) == category:
                 return val
         return None
-
-    @staticmethod
-    def _pick_category_color(
-        x_values: list[Any],
-        y_values: list[Any],
-        category: str,
-        resolved_color: ResolvedColor,
-    ) -> ResolvedColor:
-        """Build a per-category ResolvedColor from a global ResolvedColor."""
-        if resolved_color.values is not None:
-            filtered = [
-                c_val
-                for x_val, y_val, c_val in zip(
-                    x_values, y_values, resolved_color.values, strict=False
-                )
-                if str(x_val) == category and y_val is not None
-            ]
-            return ResolvedColor(values=filtered)
-
-        if resolved_color.color is not None:
-            if isinstance(resolved_color.color, list):
-                for x_val, color in zip(x_values, resolved_color.color, strict=False):
-                    if str(x_val) == category:
-                        return ResolvedColor(color=color)
-                return ResolvedColor()
-            return resolved_color
-
-        return resolved_color

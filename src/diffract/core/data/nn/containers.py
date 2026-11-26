@@ -29,6 +29,7 @@ from diffract.core.utils.build import build_with_defaults
 
 from .aggregates.repository import AggregateRepository
 from .extractors.factory import create_extractor
+from .instances.repository import InstanceRepository
 from .params.repository import ParameterRepository
 
 
@@ -62,8 +63,13 @@ class ModelParametersContainer(containers.DeclarativeContainer):
     cache_manager = providers.Dependency()
     parallel = providers.Dependency(instance_of=ParallelContext)
 
+    instance_repository = providers.Singleton(
+        InstanceRepository.initialize, metadata_index=metadata_index
+    )
+
     parameter_repository = providers.Singleton(
         ParameterRepository.initialize,
+        instances=instance_repository,
         storage_manager=storage_manager,
         metadata_index=metadata_index,
         cache_manager=cache_manager,

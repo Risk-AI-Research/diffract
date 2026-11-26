@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from diffract.core.data.nn.aggregates.identity import aggregate_identity
+from diffract.session._identifiers import check_identifier
+
 if TYPE_CHECKING:
     from diffract.core.data.nn.aggregates.repository import AggregateRepository
-    from diffract.core.data.nn.params.interface import IParameterView
-    from diffract.core.data.nn.params.proxy import ParameterDataProxy
+    from diffract.core.data.nn.params.interface import IParameterProxy, IParameterView
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +20,7 @@ class FieldIngestionError(Exception):
 
 
 class FieldIngester:
-    """Utility for ingesting precomputed fields into parameters.
-
-    Validates and writes precomputed field values into parameters.
-
-    Example:
-        >>> ingester = FieldIngester()
-        >>> ingester.ingest(
-        ...     fields_by_uid={"param_uid": {"metric": 0.95, "loss": 0.05}},
-        ...     parameters=session._get_view(),
-        ...     force=False,
-        ... )
-    """
+    """Validate conflicts and write precomputed parameter fields."""
 
     def ingest(
         self,
@@ -84,9 +75,9 @@ class FieldIngester:
         self,
         fields_by_uid: dict[str, dict[str, Any]],
         parameters: IParameterView,
-    ) -> tuple[dict[str, ParameterDataProxy], list[str]]:
+    ) -> tuple[dict[str, IParameterProxy], list[str]]:
         """Resolve parameter proxies from UIDs."""
-        resolved: dict[str, ParameterDataProxy] = {}
+        resolved: dict[str, IParameterProxy] = {}
         unknown_uids: list[str] = []
 
         for uid in fields_by_uid:
@@ -100,7 +91,7 @@ class FieldIngester:
     def _validate_fields(
         self,
         fields_by_uid: dict[str, dict[str, Any]],
-        resolved: dict[str, ParameterDataProxy],
+        resolved: dict[str, IParameterProxy],
         force: bool,
     ) -> list[tuple[str, str]]:
         """Validate fields for conflict issues."""
@@ -119,7 +110,7 @@ class FieldIngester:
     def _write_fields(
         self,
         fields_by_uid: dict[str, dict[str, Any]],
-        resolved: dict[str, ParameterDataProxy],
+        resolved: dict[str, IParameterProxy],
         parameters: IParameterView,
     ) -> None:
         """Write field values to parameters.
@@ -166,6 +157,7 @@ class AggregateIngester:
         aggregates: list[dict[str, Any]],
         repository: AggregateRepository,
         force: bool = False,
+        parameter_uids: list[str] | None = None,
     ) -> None:
         """Ingest precomputed aggregate values with validation.
 
@@ -177,6 +169,7 @@ class AggregateIngester:
                 - value: The computed value to store.
             repository: Target aggregate repository.
             force: If True, overwrite existing aggregate values.
+            parameter_uids: Optional parameter scope for resolving names.
 
         Raises:
             AggregateIngestionError: If aggregate structure is invalid or
@@ -188,16 +181,30 @@ class AggregateIngester:
 
         self._validate_structure(aggregates)
 
-        if not force:
-            conflicts = self._check_conflicts(aggregates, repository)
-            if conflicts:
-                preview = ", ".join(conflicts[:_ERROR_PREVIEW_LIMIT])
-                suffix = "..." if len(conflicts) > _ERROR_PREVIEW_LIMIT else ""
-                raise AggregateIngestionError(
-                    f"Aggregate conflicts detected: {preview}{suffix}"
-                )
-
-        self._write_aggregates(aggregates, repository)
+        with repository:
+            resolved = []
+            seen = set()
+            for agg in aggregates:
+                try:
+                    members = repository.resolve_members(
+                        tuple(agg["context_models"]),
+                        tuple(agg.get("context_params", ())),
+                        parameter_uids=parameter_uids,
+                    )
+                except ValueError as exc:
+                    raise AggregateIngestionError(str(exc)) from exc
+                identity = aggregate_identity(agg["field_name"], members)
+                if not force and (
+                    identity.uid in seen or repository.has_uid(identity.uid)
+                ):
+                    raise AggregateIngestionError(
+                        f"Aggregate conflicts detected: {identity.uid}"
+                    )
+                seen.add(identity.uid)
+                resolved.append((agg, members))
+            for agg, members in resolved:
+                proxy = repository.get_or_create(agg["field_name"], member_uids=members)
+                proxy.set_field("value", agg["value"])
         logger.info("Ingested %d aggregates", len(aggregates))
 
     def _validate_structure(self, aggregates: list[dict[str, Any]]) -> None:
@@ -205,45 +212,30 @@ class AggregateIngester:
         required_keys = ("field_name", "context_models", "value")
 
         for i, agg in enumerate(aggregates):
+            if not isinstance(agg, dict):
+                raise AggregateIngestionError(
+                    f"Aggregate at index {i} must be a mapping"
+                )
             for key in required_keys:
                 if key not in agg:
                     raise AggregateIngestionError(
                         f"Aggregate at index {i} missing '{key}'"
                     )
-
-    def _check_conflicts(
-        self,
-        aggregates: list[dict[str, Any]],
-        repository: AggregateRepository,
-    ) -> list[str]:
-        """Check for existing aggregates that would conflict."""
-        from diffract.core.data.nn.aggregates.metadata import AggregateMetadata
-
-        existing_uids = set(repository.create_view().list_uids())
-        conflicts: list[str] = []
-
-        for agg in aggregates:
-            uid = AggregateMetadata.create_uid_from_context(
-                field_name=agg["field_name"],
-                context_models=tuple(agg["context_models"]),
-                context_params=tuple(agg.get("context_params", [])),
-            )
-            if uid in existing_uids:
-                conflicts.append(uid)
-
-        return conflicts
-
-    def _write_aggregates(
-        self,
-        aggregates: list[dict[str, Any]],
-        repository: AggregateRepository,
-    ) -> None:
-        """Write aggregate values to repository."""
-        with repository.storage_manager:
-            for agg in aggregates:
-                aggregate = repository.get_or_create(
-                    field_name=agg["field_name"],
-                    context_models=tuple(agg["context_models"]),
-                    context_params=tuple(agg.get("context_params", [])),
+            if not isinstance(agg["field_name"], str):
+                raise AggregateIngestionError(
+                    f"Aggregate at index {i} requires a field name"
                 )
-                aggregate.set_field("value", agg["value"])
+            check_identifier(agg["field_name"], kind="aggregate field name")
+            for key, kind in (
+                ("context_models", "model id"),
+                ("context_params", "parameter name"),
+            ):
+                names = agg.get(key, ())
+                if not isinstance(names, (list, tuple)) or not all(
+                    isinstance(name, str) for name in names
+                ):
+                    raise AggregateIngestionError(
+                        f"Aggregate at index {i} requires a sequence of names for {key}"
+                    )
+                for name in names:
+                    check_identifier(name, kind=kind)

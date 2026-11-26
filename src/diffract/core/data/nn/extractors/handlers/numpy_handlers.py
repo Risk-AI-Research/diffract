@@ -37,7 +37,7 @@ class NumpyDenseHandler(ParameterHandler[NDArray[Any]]):
         """Return produced type for this handler (DENSE)."""
         return ParameterType.DENSE
 
-    def can_handle(self, parameter: NDArray[Any], _param_name: str) -> bool:
+    def can_handle(self, parameter: NDArray[Any], param_name: str) -> bool:
         """Return True for 2D floating-point arrays with more than one element.
 
         Masked arrays are rejected: their mask would be silently discarded,
@@ -51,13 +51,13 @@ class NumpyDenseHandler(ParameterHandler[NDArray[Any]]):
         )
 
     def process(
-        self, parameter: NDArray[Any], _param_name: str
+        self, parameter: NDArray[Any], param_name: str
     ) -> NDArray[np.floating[Any]]:
         """Return the array as NumPy weights."""
         return cast("NDArray[np.floating[Any]]", parameter)
 
     def get_additional_metadata(
-        self, parameter: NDArray[Any], _param_name: str
+        self, parameter: NDArray[Any], param_name: str
     ) -> dict[str, Any]:
         """Return optional NumPy-specific metadata such as dtype."""
         return {"numpy_dtype": str(parameter.dtype)}

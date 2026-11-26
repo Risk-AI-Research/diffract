@@ -39,9 +39,9 @@ def weights_rand(
 ) -> NDArray[np.floating[Any]]:
     r"""Permutation null model of the weight matrix.
 
-    :math:`W_{\mathrm{rand}} = \operatorname{reshape}(P\,\operatorname{vec} W)`
+    :math:`W^{\mathrm{rand}} = \operatorname{reshape}(P\,\operatorname{vec} W)`
     for a uniform permutation :math:`P` of the entries of :math:`W`: it preserves
-    the multiset of weights and destroys correlation structure.
+    the multiset of weights and randomizes their positions.
     """
     rng = np.random.default_rng(None if seed == -1 else seed)
 

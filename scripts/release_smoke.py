@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from diffract import Session
+from diffract import Session, analyze, compare
 
 
 def main() -> None:
@@ -34,6 +34,23 @@ def main() -> None:
         except ImportError as error:
             if "diffract-core[viz]" not in str(error):
                 raise AssertionError(f"unhelpful viz hint: {error}") from error
+
+    weights = np.eye(3)
+    analysis = analyze({"layer.weight": weights})
+    if analysis.summary["stable_rank"]["count"] != 1:
+        raise AssertionError("analysis did not return one stable rank")
+
+    fields = ("relative_weight_change", "relative_spectrum_change")
+    comparison = compare(
+        {"layer.weight": weights}, {"layer.weight": 2 * weights}, fields=fields
+    )
+    changes = {
+        row["field"]: row["value_scalar"]
+        for row in comparison
+        if row["member_role"] == "source"
+    }
+    if changes.keys() != set(fields) or not np.allclose(list(changes.values()), 1.0):
+        raise AssertionError(f"unexpected checkpoint changes: {changes}")
 
     print("bare-core smoke OK")
 

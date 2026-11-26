@@ -1,71 +1,35 @@
-"""Core parameter data structures and type definitions.
-
-This module provides the fundamental data structures for representing neural
-network parameters, including metadata management, type definitions, and
-proxy objects for efficient data access.
-
-Key Components:
-    - ParameterType: Extensible enum for parameter classification
-    - ParameterMetadata: Immutable metadata container for parameters
-    - ParameterDataProxy: Lazy-loading proxy for parameter data access
-
-The ParameterDataProxy provides intelligent caching and storage management,
-allowing efficient access to large parameter datasets without loading
-everything into memory at once.
-
-Example:
-    >>> metadata = ParameterMetadata(
-    ...     name="conv1.weight", ptype=ParameterType.DENSE, model_id="resnet50"
-    ... )
-    >>> proxy = ParameterDataProxy.create_and_store(
-    ...     meta=metadata,
-    ...     weights=weight_array,
-    ...     repository=repository,
-    ... )
-    >>> weights = proxy.get_field("weights")
-"""
+"""Storage-backed parameter data."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any
 
 from diffract.core.constants import TABLE_PARAMETERS
 from diffract.core.data.proxy import DataProxy
 
+from .interface import IParameterProxy
 from .metadata import ParameterMetadata
 
 if TYPE_CHECKING:
     from .interface import IParameterRepository
 
 
-@dataclass(kw_only=True)
-class ParameterDataProxy(DataProxy[ParameterMetadata]):
-    """Lazy-loading proxy for neural network parameter data.
-
-    Extends the generic DataProxy with parameter-specific functionality.
-    Provides efficient access to parameter data through intelligent caching
-    and storage management. Parameters are loaded on-demand and can be
-    prefetched for batch operations. The proxy pattern allows working with
-    large parameter datasets without memory constraints.
-
-    Example:
-        >>> # Create and store a new parameter
-        >>> proxy = ParameterDataProxy.create_and_store(
-        ...     meta=metadata,
-        ...     repository=repository,
-        ... )
-        >>> # Access fields
-        >>> weights = proxy.get_field("weights")
-        >>> proxy.set_field("frob_norm", computed_value)
-
-    Attributes:
-        meta: Immutable parameter metadata.
-        _repository: Repository that owns storage/cache managers.
-    """
+@dataclass(kw_only=True, eq=False)
+class ParameterDataProxy(
+    DataProxy[ParameterMetadata, "IParameterRepository"], IParameterProxy
+):
+    """Read and write fields for a parameter through its owning repository."""
 
     meta: ParameterMetadata
     _repository: IParameterRepository = field(repr=False)
+
+    def update_other_meta(self, updates: dict[str, Any]) -> None:
+        """Merge metadata keys into this parameter's persisted record."""
+        meta = replace(self.meta, other_meta=self.meta.other_meta | updates)
+        self.meta = self._repository.store_metadata(
+            meta, instance_uid=meta.instance_uid, update_existing=True
+        )
 
     @classmethod
     def get_table(cls) -> str:
@@ -77,17 +41,11 @@ class ParameterDataProxy(DataProxy[ParameterMetadata]):
         cls,
         meta: ParameterMetadata,
         repository: IParameterRepository,
+        *,
+        instance_uid: str | None = None,
     ) -> ParameterDataProxy:
-        """Create parameter proxy and store metadata in index.
-
-        Factory method that creates a new parameter proxy and immediately
-        stores the metadata to the metadata index.
-
-        Args:
-            meta: Parameter metadata.
-            repository: Repository owning storage, cache, and metadata managers.
-
-        Returns:
-            New parameter proxy with metadata stored.
-        """
-        return super().create_and_store(meta=meta, repository=repository)
+        """Store metadata under the reserved instance, then return its proxy."""
+        stored = repository.store_metadata(meta, instance_uid=instance_uid)
+        proxy = cls(meta=stored, _repository=repository)
+        repository.append(proxy)
+        return proxy

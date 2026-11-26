@@ -25,8 +25,8 @@ from typing import Any, Protocol, Self, runtime_checkable
 
 type UID = str
 
+#: Default table name for storage operations when not specified.
 DEFAULT_TABLE = "default"
-"""Default table name for storage operations when not specified."""
 
 
 @runtime_checkable
@@ -91,7 +91,7 @@ class IStorageManager(Protocol):
         ...
 
     def list_fields(
-        self, obj_uid: UID = None, *, table: str = DEFAULT_TABLE
+        self, obj_uid: UID | None = None, *, table: str = DEFAULT_TABLE
     ) -> list[str]:
         """List all field names for a specific object.
 
@@ -219,4 +219,30 @@ class IStorageManager(Protocol):
         Returns:
             Metadata dictionary or None if not available.
         """
+        ...
+
+
+class IPhysicalStorageManager(IStorageManager, Protocol):
+    """Field store that also owns the physical values addressed by a catalog."""
+
+    backend_name: str
+
+    def put_blob(self, key: str, value: Any) -> None:
+        """Write a value at a physical key."""
+        ...
+
+    def read_blob(self, key: str) -> Any:
+        """Read the value at a physical key."""
+        ...
+
+    def blob_metadata(self, key: str) -> dict[str, Any] | None:
+        """Read the shape, dtype and kind stored with a value."""
+        ...
+
+    def delete_blob(self, key: str) -> None:
+        """Discard the physical value at a key."""
+        ...
+
+    def clear_raw_tables(self, protected: set[str]) -> None:
+        """Clear user tables while retaining the protected catalog tables."""
         ...

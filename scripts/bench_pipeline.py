@@ -9,6 +9,14 @@ JSON report; passed a prior report via ``--baseline`` it doubles as a
 regression gate that fails when any stage gets slower than a threshold at an
 equal profile/shape/device.
 
+Beyond the pipeline stages the report records the substrate metrics that a
+storage or identity change moves first: the no-op re-apply of an already
+computed field at the parameter and cross-model levels (the skip-predicate
+lookup path, whole-store wall time), the field-address resolution round-trip
+(parse plus label render, microseconds, reported with p95), and -- for the
+disk profile -- the on-disk split between the metadata index and the value
+store (WAL sidecars included) measured after the session closes.
+
 The many-small shape is not optional: pipeline overhead scales with the NUMBER
 of parameters (a per-parameter Python loop), not their byte size, so a run on
 large matrices alone would miss substrate regressions.
@@ -27,6 +35,13 @@ Usage::
     python scripts/bench_pipeline.py --out results.json
     python scripts/bench_pipeline.py --baseline results.json --out new.json
 
+Use `--pairs single` with a single-direction implementation and
+`--pairs directed` with a two-direction implementation to measure `l_overlap`
+with its inputs already stored. Run this same script with each checkout's
+`src` on `PYTHONPATH` to record both reports. The pair comparison checks each
+direction against the single-direction baseline and both together against
+twice that baseline.
+
 Peak RSS uses ``psutil`` (the ``bench`` extra); it falls back to
 ``resource.getrusage`` when ``psutil`` is not installed. Where neither is
 available (Windows without the extra: the stdlib ``resource`` module is
@@ -39,6 +54,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import platform
 import statistics
@@ -50,6 +66,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
+from itertools import product
 from pathlib import Path
 from typing import Any, Self
 
@@ -57,7 +74,7 @@ import numpy as np
 
 # --- Report identity ---------------------------------------------------------
 
-SCHEMA = "diffract-bench-pipeline/1"
+SCHEMA = "diffract-bench-pipeline/2"
 
 DEFAULT_REPS = 5
 QUICK_REPS = 2
@@ -73,6 +90,7 @@ PARAMETER_FIELD = "frob_norm"
 IN_MODEL_FIELD = "param_norm"
 CROSS_MODEL_FIELD = "avg_l_agreement"
 EXPORT_FIELD = "frob_norm"
+PAIR_FIELD = "l_overlap"
 
 STAGES = (
     "add",
@@ -81,7 +99,18 @@ STAGES = (
     "apply_cross_model",
     "export_cold",
     "export_warm",
+    "apply_parameter_noop",
+    "apply_cross_model_noop",
 )
+
+# The no-op stages run after the exports so export_cold stays a genuinely cold
+# read; they re-apply already-computed fields, so they time the skip predicate
+# (existing-result detection) over the whole store rather than kernel compute.
+
+# One address-resolution round-trip = parse a contextual field address into its
+# structured selector and render the canonical label back. The loop pools its
+# samples across iterations for a stable p95.
+RESOLVE_ITERS = 1000
 
 # The SVD kernel routes to a CUDA path when torch reports a device; pinning its
 # config keyword makes the timed path deterministic across machines.
@@ -160,6 +189,12 @@ def _summarize(samples: list[float]) -> dict[str, float | int]:
         "mean_s": statistics.fmean(samples),
         "n": len(samples),
     }
+
+
+def _p95(samples: list[float]) -> float:
+    """The 95th-percentile sample (nearest-rank, conservative for latency)."""
+    ordered = sorted(samples)
+    return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
 
 
 # --- Peak RSS ----------------------------------------------------------------
@@ -297,21 +332,23 @@ def _write_local_config(directory: Path) -> Path:
 
 @contextlib.contextmanager
 def _make_session(profile: str) -> Any:
-    """Yield a fresh session for the profile, cleaning up any disk store after.
+    """Yield ``(session, store_dir)``, cleaning up any disk store after.
 
-    ``ram`` uses the packaged in-memory profile; ``local`` gets a throwaway
-    temp directory so every rep sees an empty persistent store.
+    ``ram`` uses the packaged in-memory profile and yields ``store_dir=None``;
+    ``local`` gets a throwaway temp directory so every rep sees an empty
+    persistent store, and yields that directory so the caller can measure the
+    on-disk footprint before cleanup.
     """
     from diffract import Session
 
     if profile == "ram":
-        yield Session(profile="ram")
+        yield Session(profile="ram"), None
         return
 
     if profile == "local":
         directory = Path(tempfile.mkdtemp(prefix="diffract-bench-"))
         try:
-            yield Session(config_path=str(_write_local_config(directory)))
+            yield Session(config_path=str(_write_local_config(directory))), directory
         finally:
             import shutil
 
@@ -321,49 +358,212 @@ def _make_session(profile: str) -> Any:
     raise ValueError(f"Unknown profile: {profile!r}")
 
 
-def _run_rep(profile: str, shape: Shape, allow_cuda: bool) -> dict[str, float]:
-    """Run one full pipeline in a fresh session; return per-stage seconds.
+def _store_sizes(directory: Path) -> dict[str, int]:
+    """On-disk bytes of the metadata index and the value store, WAL included.
+
+    The value store is the storage database plus its external blob directory;
+    the config INI written by the harness is excluded from both figures.
+    """
+    metadata_bytes = sum(f.stat().st_size for f in directory.glob("metadata.db*"))
+    value_bytes = sum(f.stat().st_size for f in directory.glob("storage.db*"))
+    blob_dir = directory / "sqlite_blobs"
+    if blob_dir.exists():
+        value_bytes += sum(f.stat().st_size for f in blob_dir.rglob("*") if f.is_file())
+    return {
+        "metadata_index_bytes": metadata_bytes,
+        "value_store_bytes": value_bytes,
+    }
+
+
+def _run_rep(
+    profile: str, shape: Shape, allow_cuda: bool
+) -> tuple[dict[str, float], dict[str, int] | None]:
+    """Run one full pipeline in a fresh session.
 
     Two same-shape models are added so the cross-model overlap has a pair to
     align. Only the first ``add`` is timed; the SVD prerequisite computed at the
-    parameter stage is reused by the later stages.
+    parameter stage is reused by the later stages. The no-op re-applies come
+    after the exports so ``export_cold`` stays cold.
+
+    Returns per-stage seconds plus the on-disk store split (None for ``ram``),
+    measured after the session context closes so buffered writes are flushed.
     """
     model_a = _build_model(shape, seed=0)
     model_b = _build_model(shape, seed=1)
     timings: dict[str, float] = {}
 
-    with _make_session(profile) as session, session:
+    with _make_session(profile) as (session, store_dir):
+        with session:
+            session.compute.configure_kernel(_SVD_KERNEL, allow_cuda=allow_cuda)
+
+            timings["add"], _ = _timed(
+                lambda: session.models.add(model_a, model_id=_MODEL_A)
+            )
+            session.models.add(model_b, model_id=_MODEL_B)
+
+            timings["apply_parameter"], _ = _timed(
+                lambda: session.compute.apply(PARAMETER_FIELD)
+            )
+            timings["apply_in_model"], _ = _timed(
+                lambda: session.compute.apply(IN_MODEL_FIELD)
+            )
+            timings["apply_cross_model"], _ = _timed(
+                lambda: session.compute.apply(CROSS_MODEL_FIELD)
+            )
+            timings["export_cold"], _ = _timed(
+                lambda: session.results.export(EXPORT_FIELD, export_format="dict")
+            )
+            timings["export_warm"], _ = _timed(
+                lambda: session.results.export(EXPORT_FIELD, export_format="dict")
+            )
+            timings["apply_parameter_noop"], _ = _timed(
+                lambda: session.compute.apply(PARAMETER_FIELD)
+            )
+            timings["apply_cross_model_noop"], _ = _timed(
+                lambda: session.compute.apply(CROSS_MODEL_FIELD)
+            )
+
+        sizes = _store_sizes(store_dir) if store_dir is not None else None
+
+    return timings, sizes
+
+
+def _run_pair_rep(
+    profile: str, shape: Shape, allow_cuda: bool, direction: str
+) -> float:
+    """Time the overlap stage and validate the number and orientation of its outputs."""
+    model_a = _build_model(shape, seed=0)
+    model_b = _build_model(shape, seed=1)
+    with _silenced(), _make_session(profile) as (session, _), session:
         session.compute.configure_kernel(_SVD_KERNEL, allow_cuda=allow_cuda)
-
-        timings["add"], _ = _timed(
-            lambda: session.models.add(model_a, model_id=_MODEL_A)
-        )
+        session.models.add(model_a, model_id=_MODEL_A)
         session.models.add(model_b, model_id=_MODEL_B)
+        session.compute.apply("weights_svals", "lower_dim")
 
-        timings["apply_parameter"], _ = _timed(
-            lambda: session.compute.apply(PARAMETER_FIELD)
-        )
-        timings["apply_in_model"], _ = _timed(
-            lambda: session.compute.apply(IN_MODEL_FIELD)
-        )
-        timings["apply_cross_model"], _ = _timed(
-            lambda: session.compute.apply(CROSS_MODEL_FIELD)
-        )
-        timings["export_cold"], _ = _timed(
-            lambda: session.results.export(EXPORT_FIELD, export_format="dict")
-        )
-        timings["export_warm"], _ = _timed(
-            lambda: session.results.export(EXPORT_FIELD, export_format="dict")
+        # The public apply expands both orientations. Seed the other result
+        # through the same repository to measure one pending orientation.
+        aggregate_repo = session._Session__agg_repo  # noqa: SLF001
+        seeded_revisions = {}
+        if direction in {"forward", "reverse"}:
+            param_repo = session._Session__param_repo  # noqa: SLF001
+            params = {
+                (param.meta.model_id, param.meta.name): param
+                for param in param_repo.create_view()
+            }
+            source, target = (
+                (_MODEL_B, _MODEL_A) if direction == "forward" else (_MODEL_A, _MODEL_B)
+            )
+            with aggregate_repo:
+                for name in model_a:
+                    first = params[source, name]
+                    second = params[target, name]
+                    left = first.get_field("weights_lsvs")
+                    right = second.get_field("weights_lsvs")
+                    proxy = aggregate_repo.get_or_create(
+                        PAIR_FIELD,
+                        member_uids=(first.meta.uid, second.meta.uid),
+                        directed=True,
+                    )
+                    proxy.set_field("value", np.abs(left.T @ right))
+                    seeded_revisions[proxy.meta.uid] = (
+                        aggregate_repo.storage_manager.live_pointer(
+                            proxy.meta.uid, "value", aggregate_repo.TABLE
+                        ).revision
+                    )
+
+        elapsed, summary = _timed(lambda: session.compute.apply(PAIR_FIELD))
+        expected_count = shape.n_params * (1 if direction == "single" else 2)
+        if (
+            summary.parameter_fields
+            or summary.cross_model_fields != (PAIR_FIELD,)
+            or len(aggregate_repo) != expected_count
+        ):
+            raise RuntimeError("The pair probe did not execute the expected workload")
+        for uid, revision in seeded_revisions.items():
+            stored = aggregate_repo.storage_manager.live_pointer(
+                uid, "value", aggregate_repo.TABLE
+            )
+            if stored.revision != revision:
+                raise RuntimeError(
+                    "The pair probe rewrote an already-computed direction"
+                )
+
+        if direction != "single":
+            rows = session.results.export_aggregates(PAIR_FIELD, export_format="list")
+            values = {
+                (
+                    row["model_source"],
+                    row["model_target"],
+                    row["members"][0]["name"],
+                ): row["value"]
+                for row in rows
+            }
+            if len(values) != expected_count:
+                raise RuntimeError("The pair probe produced duplicate or missing roles")
+            param_repo = session._Session__param_repo  # noqa: SLF001
+            params = {
+                (param.meta.model_id, param.meta.name): param
+                for param in param_repo.create_view()
+            }
+            for name in model_a:
+                left = params[_MODEL_A, name].get_field("weights_lsvs")
+                right = params[_MODEL_B, name].get_field("weights_lsvs")
+                expected = np.abs(left.T @ right)
+                for pair, value in (
+                    ((_MODEL_A, _MODEL_B, name), expected),
+                    ((_MODEL_B, _MODEL_A, name), expected.T),
+                ):
+                    np.testing.assert_allclose(
+                        values[pair], value, rtol=2e-6, atol=2e-7
+                    )
+    return elapsed
+
+
+def _run_pair_config(
+    profile: str, shape: Shape, allow_cuda: bool, reps: int, mode: str
+) -> dict[str, dict[str, float | int]]:
+    directions = ("single",) if mode == "single" else ("forward", "reverse", "both")
+    results = {}
+    for direction in directions:
+        _run_pair_rep(profile, shape, allow_cuda, direction)
+        samples = [
+            _run_pair_rep(profile, shape, allow_cuda, direction) for _ in range(reps)
+        ]
+        results[direction] = _summarize(samples)
+    return results
+
+
+def _time_resolver(iters: int) -> list[float]:
+    """Per-iteration seconds of the address-resolution round-trip.
+
+    One iteration parses a contextual field address into its structured
+    selector and renders the canonical label back -- the string-interpretation
+    path every contextual export column and viz lookup pays.
+    """
+    from diffract.session.resolver import render_label, resolve
+
+    address = f"{CROSS_MODEL_FIELD}@models[{_MODEL_A},{_MODEL_B}]"
+    selector = resolve(address)
+    if not selector.is_contextual or selector.models != (_MODEL_A, _MODEL_B):
+        raise RuntimeError(
+            f"Resolver self-check failed for {address!r}; the resolution "
+            "loop would time a broken path."
         )
 
-    return timings
+    samples: list[float] = []
+    for _ in range(iters):
+        start = time.perf_counter()
+        render_label(resolve(address))
+        samples.append(time.perf_counter() - start)
+    return samples
 
 
 def _self_check() -> None:
     """Fail loudly if the pipeline wiring stops producing what the harness times.
 
     Guards the honesty of the benchmark: a stage that silently no-ops would
-    otherwise report a fast-but-meaningless time.
+    otherwise report a fast-but-meaningless time, and a no-op stage that
+    silently recomputes would report kernel time as lookup time.
     """
     from diffract import Session
 
@@ -379,6 +579,7 @@ def _self_check() -> None:
         aggs = session.results.export_aggregates(
             CROSS_MODEL_FIELD, export_format="dict"
         )
+        noop = session.compute.apply(PARAMETER_FIELD)
 
     if not metrics:
         raise RuntimeError(
@@ -389,6 +590,35 @@ def _self_check() -> None:
         raise RuntimeError(
             f"Self-check produced no {CROSS_MODEL_FIELD!r} aggregates; the "
             "cross-model stage is not measuring real work."
+        )
+    if not any(name == PARAMETER_FIELD for name, _ in noop.skipped):
+        raise RuntimeError(
+            f"Re-applying {PARAMETER_FIELD!r} wrote new fields; the no-op "
+            "stages would time kernel compute instead of the skip predicate."
+        )
+
+    with _silenced():
+        _run_config_store_check()
+
+
+def _run_config_store_check() -> None:
+    """Verify the on-disk store measurement sees both stores as non-empty.
+
+    A rename of either database file would silently zero the size figures;
+    this runs a tiny pipeline on the disk profile and demands non-zero bytes.
+    """
+    shape = Shape(name="check", n_params=2, dim=8)
+    with _make_session("local") as (session, store_dir):
+        with session:
+            session.compute.configure_kernel(_SVD_KERNEL, allow_cuda=False)
+            session.models.add(_build_model(shape, seed=0), model_id=_MODEL_A)
+            session.compute.apply(PARAMETER_FIELD)
+        sizes = _store_sizes(store_dir)
+
+    if sizes["metadata_index_bytes"] <= 0 or sizes["value_store_bytes"] <= 0:
+        raise RuntimeError(
+            f"Store size self-check read {sizes}; the size probe is not "
+            "finding the store files."
         )
 
 
@@ -428,19 +658,22 @@ def _run_config(
     _run_rep(profile, shape, allow_cuda)  # warm-up: backend first-touch, allocators
 
     samples: dict[str, list[float]] = {stage: [] for stage in STAGES}
+    store: dict[str, int] | None = None
     tracker = _PeakRSS()
     with tracker:
         baseline_rss = tracker.sample()
         for _ in range(reps):
-            timings = _run_rep(profile, shape, allow_cuda)
+            timings, sizes = _run_rep(profile, shape, allow_cuda)
             for stage, seconds in timings.items():
                 samples[stage].append(seconds)
+            store = sizes or store
 
     peak = tracker.peak_bytes
     return {
         "profile": profile,
         "shape": shape.describe(),
         "stages": {stage: _summarize(samples[stage]) for stage in STAGES},
+        "store": store,
         "memory": {
             "rss_method": tracker.method,
             "baseline_rss_mb": round(baseline_rss / 1e6, 2),
@@ -492,6 +725,7 @@ def run_benchmark(
     shapes: tuple[Shape, ...],
     device: str,
     reps: int,
+    pairs: str | None = None,
 ) -> dict[str, Any]:
     """Run the full grid of profiles x shapes and return the JSON-ready report."""
     import_start = time.perf_counter()
@@ -503,11 +737,15 @@ def run_benchmark(
 
     recorded_device, allow_cuda = _resolve_device(device)
 
-    results = [
-        _run_config(profile, shape, allow_cuda, reps)
-        for profile in profiles
-        for shape in shapes
-    ]
+    resolver_samples = _time_resolver(RESOLVE_ITERS)
+
+    grid = tuple(product(profiles, shapes))
+    results = [_run_config(profile, shape, allow_cuda, reps) for profile, shape in grid]
+    if pairs is not None:
+        for result, (profile, shape) in zip(results, grid, strict=True):
+            result["pair_stages"] = _run_pair_config(
+                profile, shape, allow_cuda, reps, pairs
+            )
 
     return {
         "schema": SCHEMA,
@@ -521,6 +759,10 @@ def run_benchmark(
             "tqdm": "disabled",
             "logging": "WARNING",
             "import_diffract_s": round(import_s, 4),
+        },
+        "resolver": {
+            **_summarize(resolver_samples),
+            "p95_s": _p95(resolver_samples),
         },
         "results": results,
     }
@@ -592,6 +834,47 @@ def compare(
     return rows
 
 
+def compare_pairs(
+    baseline: dict[str, Any], current: dict[str, Any], *, threshold: float
+) -> list[dict[str, Any]]:
+    """Compare real single-direction and paired overlap stages at the same shape."""
+    if baseline["protocol"]["device"] != current["protocol"]["device"]:
+        raise ValueError("Pair timing reports must use the same SVD device")
+    base_results = _index(baseline)
+    rows = []
+    for key, result in _index(current).items():
+        base = base_results.get(key)
+        single = base.get("pair_stages", {}).get("single") if base else None
+        if base is None or base["shape"] != result["shape"] or single is None:
+            raise ValueError(
+                f"Missing same-shape single-direction pair baseline for {key}"
+            )
+        for direction in ("forward", "reverse", "both"):
+            candidate = result.get("pair_stages", {}).get(direction)
+            if candidate is None or not all(
+                math.isfinite(sample) and sample > 0
+                for sample in (candidate["median_s"], single["median_s"])
+            ):
+                raise ValueError(f"Missing valid pair timing for {key} {direction}")
+            base_s = single["median_s"] * (2 if direction == "both" else 1)
+            current_s = candidate["median_s"]
+            change = current_s / base_s - 1
+            rows.append(
+                {
+                    "profile": key[0],
+                    "shape": key[1],
+                    "stage": f"{PAIR_FIELD}_{direction}",
+                    "baseline_s": base_s,
+                    "current_s": current_s,
+                    "ratio": current_s / base_s,
+                    "pct_change": change * 100,
+                    "regressed": change > threshold,
+                    "device_mismatch": False,
+                }
+            )
+    return rows
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -604,6 +887,12 @@ def _print_report(report: dict[str, Any]) -> None:
         f"python={env['python']} numpy={env['numpy']} "
         f"import_diffract={proto['import_diffract_s']}s"
     )
+    resolver = report.get("resolver")
+    if resolver:
+        print(
+            f"resolve_roundtrip: median={resolver['median_s'] * 1e6:.2f} us  "
+            f"p95={resolver['p95_s'] * 1e6:.2f} us  (n={resolver['n']})"
+        )
     for result in report["results"]:
         shape = result["shape"]
         mem = result["memory"]
@@ -613,10 +902,22 @@ def _print_report(report: dict[str, Any]) -> None:
             f"({shape['total_bytes'] / 1e6:.1f} MB)  "
             f"peak_rss={mem['peak_rss_mb']} MB ({mem['rss_method']})"
         )
+        store = result.get("store")
+        if store:
+            print(
+                f"    metadata_index={store['metadata_index_bytes'] / 1e6:.2f} MB  "
+                f"value_store={store['value_store_bytes'] / 1e6:.2f} MB"
+            )
         for stage in STAGES:
             stats = result["stages"][stage]
             print(
-                f"    {stage:<18} "
+                f"    {stage:<22} "
+                f"min={stats['min_s'] * 1e3:9.3f} ms  "
+                f"median={stats['median_s'] * 1e3:9.3f} ms"
+            )
+        for direction, stats in result.get("pair_stages", {}).items():
+            print(
+                f"    {(PAIR_FIELD + '_' + direction):<22} "
                 f"min={stats['min_s'] * 1e3:9.3f} ms  "
                 f"median={stats['median_s'] * 1e3:9.3f} ms"
             )
@@ -637,7 +938,7 @@ def _print_comparison(rows: list[dict[str, Any]], threshold: float) -> bool:
         flag = "FAIL" if row["regressed"] else "ok"
         regressed = regressed or row["regressed"]
         print(
-            f"    [{row['profile']}/{row['shape']}] {row['stage']:<18} "
+            f"    [{row['profile']}/{row['shape']}] {row['stage']:<22} "
             f"{row['pct_change']:+7.1f}%  "
             f"({row['baseline_s'] * 1e3:.3f} -> {row['current_s'] * 1e3:.3f} ms)  "
             f"{flag}"
@@ -723,6 +1024,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--small-many", type=_shape_arg, default=None, help="override N:DIM"
     )
+    parser.add_argument(
+        "--pairs",
+        choices=("single", "directed"),
+        help="measure the isolated overlap stage for the corresponding implementation",
+    )
     args = parser.parse_args(argv)
 
     if args.quick and args.reps == DEFAULT_REPS:
@@ -732,7 +1038,11 @@ def main(argv: list[str] | None = None) -> int:
     shapes = _resolve_shapes(args)
 
     report = run_benchmark(
-        profiles=profiles, shapes=shapes, device=args.device, reps=args.reps
+        profiles=profiles,
+        shapes=shapes,
+        device=args.device,
+        reps=args.reps,
+        pairs=args.pairs,
     )
 
     args.out.write_text(json.dumps(report, indent=2) + "\n")
@@ -747,6 +1057,11 @@ def main(argv: list[str] | None = None) -> int:
             threshold=args.threshold,
             abs_floor_s=args.abs_floor_ms / 1e3,
         )
+        if args.pairs == "directed":
+            try:
+                rows.extend(compare_pairs(baseline, report, threshold=args.threshold))
+            except ValueError as err:
+                parser.error(str(err))
         if _print_comparison(rows, args.threshold):
             print("\nRegression gate FAILED.")
             return 1

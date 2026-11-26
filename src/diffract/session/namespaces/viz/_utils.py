@@ -24,10 +24,6 @@ def _to_style_source(value: Any, kind: StyleLiteralKind) -> Any:
     literal of ``kind`` stays a literal, any other string becomes a ``FieldRef``,
     and non-string values (``FieldRef``/``None``) pass through unchanged.
     """
-    from diffract.viz.styling.sources import is_style_literal
+    from diffract.viz.styling.sources import coerce_style_source
 
-    if isinstance(value, str) and not is_style_literal(value, kind):
-        from diffract.viz.data import FieldRef
-
-        return FieldRef(field=value)
-    return value
+    return coerce_style_source(value, kind)

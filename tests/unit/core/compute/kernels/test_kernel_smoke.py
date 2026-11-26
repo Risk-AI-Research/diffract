@@ -75,6 +75,8 @@ EXPECTED_KERNELS = [
     "power_law_fit",
     "r_agreement",
     "r_overlap",
+    "relative_spectrum_change",
+    "relative_weight_change",
     "stable_rank",
     "tpl_alpha_norm",
     "tpl_concentration",
@@ -86,6 +88,7 @@ EXPECTED_KERNELS = [
     "w1_rand_distance",
     "weights_rand",
     "weights_rand_svd",
+    "weights_rand_vectors",
     "weights_std",
     "weights_svd",
 ]

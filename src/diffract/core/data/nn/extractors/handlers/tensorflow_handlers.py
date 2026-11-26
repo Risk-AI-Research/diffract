@@ -46,11 +46,11 @@ else:
         def parameter_type(self) -> ParameterType:  # noqa: D102
             return ParameterType.DENSE
 
-        def can_handle(self, parameter: Any, _param_name: str) -> bool:  # noqa: D102
+        def can_handle(self, parameter: Any, param_name: str) -> bool:  # noqa: D102
             return isinstance(parameter, tf.keras.layers.Dense)
 
         def process(  # noqa: D102
-            self, parameter: Any, _param_name: str
+            self, parameter: Any, param_name: str
         ) -> NDArray[np.floating[Any]]:
             if not isinstance(parameter, tf.keras.layers.Dense):
                 msg = f"Expected tf.keras.layers.Dense, got {type(parameter)}"
@@ -68,7 +68,7 @@ else:
             return cast("NDArray[np.floating[Any]]", arr)
 
         def get_additional_metadata(  # noqa: D102
-            self, parameter: Any, _param_name: str
+            self, parameter: Any, param_name: str
         ) -> dict[str, Any]:
             if not isinstance(parameter, tf.keras.layers.Dense):
                 return {}

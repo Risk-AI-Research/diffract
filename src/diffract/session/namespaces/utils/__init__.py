@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 
 from dependency_injector.wiring import Provide, inject
 
+from diffract.core.storage.catalog_manager import storage_activity
 from diffract.session._identifiers import check_identifier
 from diffract.session.namespaces.utils.merger import (
     AggregateMerger,
-    MergeTargetState,
     SessionMerger,
 )
 from diffract.session.session import Session, SessionContext
@@ -64,29 +64,21 @@ class UtilsNamespace:
             fields: Specific fields to merge. If None, merges all fields.
             verify: If True, check for conflicts and skip duplicates.
             read_budget_bytes: Maximum bytes to read during merge operation.
+
+        Example:
+            >>> import numpy as np
+            >>> from diffract import Session
+            >>> with Session(profile="ram") as source, Session(profile="ram") as target:
+            ...     _ = source.models.add({"weights": np.eye(2)}, model_id="net")
+            ...     target.utils.merge_other_session(source)
+            ...     target.models.list()
+            ['net']
         """
-        with self.__session_or_context:
+        with (
+            self.__session_or_context,
+            storage_activity(self.__param_repo.storage_manager, "merge"),
+        ):
             parallel = self.__parallel_context_factory()
-            target_state: MergeTargetState | None = None
-            if verify:
-                target_state = MergeTargetState()
-
-                models = self.__session_or_context.models
-                for parameter_info in models.parameters.list(verbose=True):
-                    model_id = parameter_info["model_id"]
-                    name = parameter_info["name"]
-                    uid = parameter_info["uid"]
-                    available_fields = parameter_info["available_fields"]
-
-                    if model_id not in target_state.models_mapping:
-                        target_state.models_mapping[model_id] = set()
-
-                    target_state.models_mapping[model_id].add(name)
-                    target_state.parameters_fields_mapping[(model_id, name)] = (
-                        available_fields
-                    )
-                    target_state.parameters_uids_mapping[(model_id, name)] = uid
-
             if isinstance(other_session_or_context, Session):
                 source_context = other_session_or_context.filter()
             else:
@@ -98,6 +90,7 @@ class UtilsNamespace:
             self._validate_source_identifiers(source_params, source_aggs)
 
             # Merge parameters if any exist
+            member_mapping = {}
             if source_params:
                 logger.info(
                     "Starting merge from session '%s' (%d parameters)",
@@ -115,11 +108,11 @@ class UtilsNamespace:
                 )
 
                 merger = SessionMerger(parallel=parallel)
-                merger.merge(
+                member_mapping = merger.merge(
                     source=source_params,
                     source_fields_by_uid=source_fields_by_uid,
                     target_repository=self.__param_repo,
-                    target_state=target_state,
+                    verify=verify,
                     fields=fields,
                     read_budget_bytes=read_budget_bytes,
                 )
@@ -138,6 +131,7 @@ class UtilsNamespace:
                 aggregate_merger.merge(
                     source_aggregates=source_aggs,
                     target_repository=self.__agg_repo,
+                    member_mapping=member_mapping,
                     fields=fields,
                     verify=verify,
                 )

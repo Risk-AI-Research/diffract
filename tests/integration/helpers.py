@@ -11,13 +11,6 @@ from typing import Any
 import numpy as np
 
 try:
-    import psutil
-
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-
-try:
     from torch import nn
 
     TORCH_AVAILABLE = True
@@ -92,8 +85,7 @@ def measure_memory_usage() -> dict[str, float]:
     Returns:
         Dictionary with memory metrics in MB.
     """
-    if not PSUTIL_AVAILABLE:
-        return {"rss_mb": 0.0, "vms_mb": 0.0}
+    import psutil
 
     process = psutil.Process(os.getpid())
     mem_info = process.memory_info()

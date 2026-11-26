@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 
 import diffract.core.utils.imports as import_utils
+from diffract.core.data.identity import is_extra_state_key
 
 from .interface import IParameterExtractor
 
@@ -79,6 +80,7 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
     if isinstance(model, dict) and all(
         isinstance(name, str) and isinstance(value, np.ndarray)
         for name, value in model.items()
+        if not is_extra_state_key(name)
     ):
         from .numpy import NumpyDictExtractor
 
@@ -95,7 +97,11 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
     if (
         isinstance(model, dict)
         and model
-        and all(isinstance(value, np.ndarray) for value in model.values())
+        and all(
+            isinstance(value, np.ndarray)
+            for key, value in model.items()
+            if not is_extra_state_key(key)
+        )
     ):
         key_types = sorted(
             {type(name).__name__ for name in model if not isinstance(name, str)}
@@ -120,7 +126,11 @@ def create_extractor(model: Any, *args: Any, **kwargs: Any) -> IParameterExtract
         if (
             isinstance(model, dict)
             and model
-            and all(isinstance(v, torch.Tensor) for v in model.values())
+            and all(
+                isinstance(value, torch.Tensor)
+                for key, value in model.items()
+                if not is_extra_state_key(key)
+            )
         ):
             from .torch import TorchStateDictExtractor
 

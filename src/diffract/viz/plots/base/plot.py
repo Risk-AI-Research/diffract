@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any
 import plotly.graph_objects as go
 
 from diffract.session import Session
+from diffract.session.resolver import FieldSelector, render_label, resolve
 from diffract.viz.data import DataProvider, Entry, FieldRef
+from diffract.viz.data.extraction import field_label
 from diffract.viz.plots.base.overlay import Overlay
 from diffract.viz.styling import apply_theme
 
@@ -27,6 +29,9 @@ class Plot(ABC):
     _traces_data: dict[str, dict[str, Any]] | None = field(
         default=None, repr=False, compare=False
     )
+    _field_labels: dict[str | FieldSelector, str] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     _theme: Theme | None = field(default=None, repr=False, compare=False)
 
     def render(self, session: Session, theme: Theme | None = None) -> go.Figure:
@@ -44,6 +49,9 @@ class Plot(ABC):
         self._theme = theme
         data_provider = DataProvider(session)
         entries = self._collect_entries(data_provider)
+        self._field_labels = {
+            f: field_label(entries, f) for f in self._collect_fields_to_fetch()
+        }
         self._traces_data = self._build_traces_data(entries)
         fig: go.Figure = self._build_figure()
         self._add_overlay_traces_by_mro(fig)
@@ -79,6 +87,12 @@ class Plot(ABC):
 
         return result
 
+    def _field_label(self, ref: FieldRef | str | FieldSelector) -> str:
+        address = ref.field if isinstance(ref, FieldRef) else ref
+        if address in self._field_labels:
+            return self._field_labels[address]
+        return render_label(resolve(address))
+
     @abstractmethod
     def _build_traces_data(
         self, entries: dict[str, Entry]
@@ -90,16 +104,15 @@ class Plot(ABC):
         raise NotImplementedError
 
     def _add_overlay_traces_by_mro(self, fig: go.Figure) -> None:
-        """Hook for mixins to add overlay traces (jitter, annotations, etc.).
-
-        Override in mixins to add additional traces after the main figure is built.
-        Always call super()._add_overlay_traces(fig) to ensure proper MRO chaining.
-        """
+        """Run each distinct overlay hook once in MRO order."""
+        seen = {Overlay.add_overlay_traces}
         for cls in type(self).mro():
-            if cls is Overlay:
+            if not issubclass(cls, Overlay):
                 continue
-            if issubclass(cls, Overlay):
-                cls.add_overlay_traces(self, fig)
+            hook = cls.add_overlay_traces
+            if hook not in seen:
+                seen.add(hook)
+                hook(self, fig)
 
     def _configure_by_mro(self, fig: go.Figure) -> None:
         """Apply configurator mixins in MRO order."""

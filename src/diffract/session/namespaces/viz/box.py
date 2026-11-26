@@ -31,7 +31,13 @@ def box(
     jitter_seed: int = 42,
     jitter_density_scale: bool = True,
     jitter_color: str | FieldRef | None = None,
+    jitter_coloraxis_id: int | None = None,
     jitter_colorscale: str = "Viridis",
+    jitter_showscale: bool = True,
+    jitter_cmin: float | None = None,
+    jitter_cmax: float | None = None,
+    jitter_colorbar_title: str | None = None,
+    jitter_coloraxis_override: bool = False,
     x_title: str | None = None,
     x_showticklabels: bool = True,
     x_tickangle: int | None = None,
@@ -90,7 +96,13 @@ def box(
         jitter_seed: Random seed for the jitter overlay.
         jitter_density_scale: Scale jitter spread by local point density.
         jitter_color: Field or color for jitter points.
+        jitter_coloraxis_id: Shared color axis id for jitter points.
         jitter_colorscale: Colorscale for jitter points.
+        jitter_showscale: Show the jitter colorbar.
+        jitter_cmin: Minimum value for jitter color mapping.
+        jitter_cmax: Maximum value for jitter color mapping.
+        jitter_colorbar_title: Title of the jitter colorbar.
+        jitter_coloraxis_override: Apply jitter styling to an existing shared axis.
         x_title: X-axis title.
         x_showticklabels: Show x-axis tick labels.
         x_tickangle: Angle of x-axis tick labels.
@@ -154,7 +166,13 @@ def box(
         jitter_seed=jitter_seed,
         jitter_density_scale=jitter_density_scale,
         jitter_color=_to_style_source(jitter_color, StyleLiteralKind.COLOR),
+        jitter_coloraxis_id=jitter_coloraxis_id,
         jitter_colorscale=jitter_colorscale,
+        jitter_showscale=jitter_showscale,
+        jitter_cmin=jitter_cmin,
+        jitter_cmax=jitter_cmax,
+        jitter_colorbar_title=jitter_colorbar_title,
+        jitter_coloraxis_override=jitter_coloraxis_override,
         x_title=x_title,
         x_showticklabels=x_showticklabels,
         x_tickangle=x_tickangle,

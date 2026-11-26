@@ -18,14 +18,14 @@ REDIS_DB = int(os.getenv("TEST_REDIS_DB", "15"))  # use isolated DB by default
 
 
 @pytest.fixture
-def cache() -> RedisLRUCacheManager:
+def cache(request: pytest.FixtureRequest) -> RedisLRUCacheManager:
     try:
         cache = RedisLRUCacheManager(
             host=REDIS_HOST,
             port=REDIS_PORT,
             db=REDIS_DB,
             max_memory_mb=16,
-            ttl_seconds=None,
+            ttl_seconds=getattr(request, "param", None),
             key_prefix="diffract:test:cache:",
         )
     except Exception as e:  # noqa: BLE001 - test environment dependent
@@ -130,26 +130,13 @@ def test_clear(cache: RedisLRUCacheManager) -> None:
     assert cache.get_field("b", "f") is None
 
 
-def test_ttl_expiration() -> None:
-    pytest.importorskip("redis")
-    cache = RedisLRUCacheManager(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=REDIS_DB,
-        max_memory_mb=16,
-        ttl_seconds=1,
-        key_prefix="diffract:test:cache:ttl:",
-    )
-    cache.clear()
-
+@pytest.mark.parametrize("cache", [1], indirect=True)
+def test_ttl_expiration(cache: RedisLRUCacheManager) -> None:
     cache.set_field("t1", "k", "v")
     assert cache.get_field("t1", "k") == "v"
 
     time.sleep(1.2)
     assert cache.get_field("t1", "k") is None
-
-    cache.clear()
-    cache.close()
 
 
 def test_ram_only_settings(cache: RedisLRUCacheManager) -> None:
@@ -205,3 +192,18 @@ def test_large_value_eviction_behavior(cache: RedisLRUCacheManager) -> None:
     # Operations still succeed and cache is responsive
     cache.set_field("probe", "x", 1)
     assert cache.get_field("probe", "x") == 1
+
+
+def test_revision_is_checked_in_the_same_redis_frame_as_the_value(cache):
+    missing = object()
+    first, second = "3" * 32, "9" * 32
+    cache.set_field("owner", "field", None, revision=first)
+    assert cache.has_field("owner", "field", revision=first)
+    assert not cache.has_field("owner", "field", revision=second)
+    assert cache.get_field("owner", "field", revision=first, default=missing) is None
+    assert (
+        cache.get_field("owner", "field", revision=second, default=missing) is missing
+    )
+    cache.set_field("owner", "field", np.arange(3), revision=second)
+    np.testing.assert_array_equal(cache.get_field("owner", "field"), np.arange(3))
+    assert not cache.has_field("owner", "field", revision=first)

@@ -8,20 +8,26 @@ identifiers, and field names.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import IntFlag, auto
+from typing import Literal
 
 # Domain primitives.
+#: Unique identifier of a parameter in storage.
 type ParameterUID = str
-"""Unique identifier of a parameter in storage."""
 
+#: Zero-based positional index within a view or list-like ordering.
 type ParameterIndex = int
-"""Zero-based positional index within a view or list-like ordering."""
 
+#: Field name for parameter-associated data stored in backends (e.g., "weights").
 type FieldName = str
-"""Field name for parameter-associated data stored in backends (e.g., "weights")."""
 
+#: Unique identifier of a model containing parameters.
 type ModelID = str
-"""Unique identifier of a model containing parameters."""
+
+
+#: A training step, a final-checkpoint alias, or a sequence of either.
+type StepSelection = int | Literal["final"] | Sequence[int | Literal["final"]]
 
 
 class ParameterType(IntFlag):

@@ -28,3 +28,13 @@ def test_unknown_format_lists_known_and_suggests(
 def test_unknown_format_without_close_match_lists_known() -> None:
     with pytest.raises(ValueError, match="Known: "):
         registry.get_formatter("parquet")
+
+
+def test_custom_formatter_wrong_result_is_rejected_at_registration() -> None:
+    class WrongFormatter:
+        def format_results(self, *_args):
+            return "results"
+
+    with pytest.raises(TypeError, match="must return StructuredExportResult"):
+        registry.register_formatter("wrong", WrongFormatter())
+    assert "wrong" not in registry.FORMATTERS

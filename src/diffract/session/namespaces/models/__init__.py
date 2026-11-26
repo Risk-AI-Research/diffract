@@ -4,22 +4,31 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from dependency_injector.wiring import Provide, inject
 
-from diffract.core.constants import TABLE_AGGREGATES, TABLE_PARAMETERS
-from diffract.core.data.identity import IdentifierValidationError
+from diffract.core.constants import TABLE_PARAMETERS
+from diffract.core.data.identity import (
+    DuplicateParameterError,
+    IdentifierValidationError,
+    training_step,
+)
+from diffract.core.data.metadata.errors import UniqueConstraintError
 from diffract.core.data.nn.extractors.base import ExtractorOverrides, ParameterOverrides
+from diffract.core.data.nn.extractors.report import ExtractionReport
+from diffract.core.storage.catalog_manager import storage_activity
 from diffract.core.utils.exceptions import format_exception_message
+from diffract.core.utils.hashing import get_unique_id
 from diffract.session._identifiers import check_identifier
 from diffract.session.errors import (
+    EmptyExtractionError,
     InvalidIdentifierError,
     ModelAlreadyExistsError,
     ModelNotFoundError,
     SessionError,
 )
+from diffract.session.resolver import resolve_models
 from diffract.session.session import Session, SessionContext
 from diffract.session.summaries import EraseSummary
 
@@ -54,13 +63,18 @@ class ModelsNamespace:
         extractor_factory: Callable[..., IParameterExtractor] = Provide[
             "nn.extractor_factory.provider"
         ],
+        parameters: ParametersNamespace | None = None,
     ) -> None:
         self.__session_or_context = session_or_context
         self.__param_repo = parameter_repository
         self.__agg_repo = aggregate_repository
         self.__extractor_factory = extractor_factory
 
-        self.parameters = ParametersNamespace(session_or_context)
+        self.parameters = (
+            parameters
+            if parameters is not None
+            else ParametersNamespace(session_or_context)
+        )
 
     def add(
         self,
@@ -68,11 +82,16 @@ class ModelsNamespace:
         model_id: str | None = None,
         parameter_overrides: dict[str, ParameterOverrides] | None = None,
         custom_handlers: Iterable[ParameterHandler] | None = None,
-    ) -> None:
+        *,
+        step: int = 0,
+        display_label: str | None = None,
+        required_names: Iterable[str] = (),
+    ) -> ExtractionReport:
         """Add a neural network model to the session.
 
-        Extracts parameters from the provided model and stores them for analysis.
-        Parameters are automatically persisted and can be retrieved in future sessions.
+        Stores a snapshot of the weights at this step. Once this call returns,
+        the caller can update the model or reuse its arrays for the next step.
+        Persistent profiles also make the checkpoint available in later sessions.
 
         Args:
             model: Neural network model object (PyTorch, TensorFlow, etc.)
@@ -80,30 +99,51 @@ class ModelsNamespace:
             model_id: Unique identifier for the model. Auto-generated if None.
             parameter_overrides: Custom parameter extraction overrides by name.
             custom_handlers: Additional parameter handlers for custom parameter types.
+            step: Nonnegative training step. Defaults to zero.
+            display_label: Optional display text for this checkpoint.
+            required_names: Exact source parameter names that must be extractable.
+                Their converted weights are held in memory until all required
+                names pass. Other eligible parameters are also stored.
+
+        Returns:
+            Per-name extraction outcomes, reasons and source and storage dtypes.
 
         Raises:
-            ModelAlreadyExistsError: If model_id already exists in the session.
+            ModelAlreadyExistsError: If the model already has parameters at this step.
+            TypeError: If the step is not an integer or the label is not text.
+            ValueError: If the step is negative or exceeds the storage range.
             InvalidIdentifierError: If model_id is not over the accepted
                 identifier alphabet.
-            SessionError: If parameter extraction fails or yields no parameters.
+            EmptyExtractionError: If there are no extracted parameters. Its
+                coverage attribute contains the per-input reasons.
+            SessionError: If required names cannot be extracted or the import fails.
         """
+        step = training_step(step)
+        if display_label is not None and not isinstance(display_label, str):
+            raise TypeError("display_label must be a string or None.")
         with self.__session_or_context:
             try:
-                extractor = self.__extractor_factory(
-                    model=model,
-                    overrides=self.__build_extractor_overrides(
-                        model_id, parameter_overrides
-                    ),
-                    custom_handlers=custom_handlers,
-                )
-
-                previous_len = len(self.__param_repo)
-                extractor.extract_parameters(self.__param_repo)
-                new_len = len(self.__param_repo)
-
-                self.__session_or_context._field_cache.invalidate()
-
-            except SessionError:
+                name = model_id or get_unique_id()
+                check_identifier(name, kind="model id")
+                with (
+                    storage_activity(self.__param_repo.storage_manager, "ingest"),
+                    self.__param_repo,
+                ):
+                    report = self.__add_at_coordinate(
+                        model,
+                        name,
+                        model_id,
+                        parameter_overrides,
+                        custom_handlers,
+                        step,
+                        display_label,
+                        frozenset(
+                            (required_names,)
+                            if isinstance(required_names, str)
+                            else required_names
+                        ),
+                    )
+            except (SessionError, DuplicateParameterError):
                 raise
             except IdentifierValidationError as e:
                 raise InvalidIdentifierError(str(e)) from e
@@ -111,21 +151,74 @@ class ModelsNamespace:
                 msg = f"Failed to add model: {format_exception_message(e)}"
                 raise SessionError(msg) from e
 
-            if new_len == previous_len:
-                msg = (
-                    f"Model '{model_id or type(model).__name__}' produced no "
-                    "parameters. Unsupported parameter types are skipped during "
-                    "extraction; supported inputs are PyTorch, TensorFlow, "
-                    "Flax, and ONNX models (install the matching extra) and "
-                    "dicts of 2D floating-point NumPy arrays."
-                )
-                raise SessionError(msg)
+            self.__session_or_context._field_cache.invalidate()
+            logger.info("Added model '%s'", name)
+            return report
 
-            logger.info(
-                "Added model '%s' with %d parameters",
-                model_id or "<auto-generated>",
-                new_len - previous_len,
+    def __add_at_coordinate(
+        self,
+        model: Any,
+        name: str,
+        model_id: str | None,
+        parameter_overrides: dict[str, ParameterOverrides] | None,
+        custom_handlers: Iterable[ParameterHandler] | None,
+        step: int,
+        display_label: str | None,
+        required_names: frozenset[str],
+    ) -> ExtractionReport:
+        instances = self.__param_repo.instances
+        instance = instances.get_or_create_instance(name)
+        coordinate = {"instance_uid": instance.instance_uid, "step": step}
+        index = self.__param_repo.metadata_index
+        if index.query(TABLE_PARAMETERS, where=coordinate, limit=1):
+            raise ModelAlreadyExistsError(
+                f"Model '{name}' already exists at step {step}"
             )
+        extractor = self.__extractor_factory(
+            model=model,
+            overrides=ExtractorOverrides(
+                model_id=model_id, parameter_overrides=parameter_overrides or {}
+            ),
+            custom_handlers=custom_handlers,
+        )
+        report = extractor.extract_parameters(
+            self.__param_repo,
+            instance=instance,
+            step=step,
+            required_names=required_names,
+        )
+        if not report.counts["extracted"]:
+            raise EmptyExtractionError(name, report)
+
+        instances.set_extraction(instance.instance_uid, step, report)
+        if display_label is not None:
+            instances.set_step_label(
+                instance.instance_uid, step, display_label, overwrite=True
+            )
+        return report
+
+    def set_display_label(self, model_id: str, step: int, label: str) -> None:
+        """Set the display text for an existing checkpoint in this scope."""
+        if not isinstance(label, str):
+            raise TypeError("label must be a string.")
+        with self.__session_or_context, self.__param_repo:
+            global_scope = isinstance(self.__session_or_context, Session)
+            view = (
+                self.__param_repo.create_view()
+                if global_scope
+                else self.__session_or_context._param_filter_context
+            )
+            selection = resolve_models(
+                view,
+                self.__param_repo.instances,
+                [(model_id, step)],
+                allow_empty_instances=False,
+            )
+            (coordinate,) = selection.coordinates
+            self.__param_repo.instances.set_step_label(
+                *coordinate, label, overwrite=True
+            )
+        self.__session_or_context._field_cache.invalidate()
 
     def rename(
         self,
@@ -147,81 +240,43 @@ class ModelsNamespace:
         with self.__session_or_context:
             check_identifier(new_model_id, kind="model id")
 
-            params = self.__param_repo.create_view()
-            model_params = params.filter_by_model_id(model_id)
-
-            if not model_params:
-                msg = f"Model '{model_id}' not found"
-                raise ModelNotFoundError(msg)
-
-            new_model_params = params.filter_by_model_id(new_model_id)
-            if new_model_params:
-                msg = f"Model '{new_model_id}' already exists"
-                raise ModelAlreadyExistsError(msg)
-
-            param_uids = model_params.list_uids()
-
-            aggs = self.__agg_repo.create_view()
-            model_aggs = aggs.filter_by_context_models(model_id)
-            agg_uids = model_aggs.list_uids()
-
-            with self.__param_repo:
-                for uid in param_uids:
-                    param = params[uid]
-                    old_meta = param.meta
-                    new_meta = replace(old_meta, model_id=new_model_id)
-
-                    object.__setattr__(param, "meta", new_meta)
-
-                    meta_dict = new_meta.to_dict()
-                    meta_dict.pop("uid")
-                    self.__param_repo.metadata_index.upsert(
-                        TABLE_PARAMETERS,
-                        uid=uid,
-                        **meta_dict,
+            instances = self.__param_repo.instances
+            with self.__param_repo.metadata_index:
+                instance = instances.get_by_name(model_id)
+                if instance is None:
+                    raise ModelNotFoundError(f"Model '{model_id}' not found")
+                if model_id == new_model_id:
+                    raise ModelAlreadyExistsError(
+                        f"Model '{new_model_id}' already exists"
                     )
-
-            with self.__agg_repo:
-                for uid in agg_uids:
-                    agg = aggs[uid]
-                    old_meta = agg.meta
-                    new_context_models = tuple(
-                        new_model_id if cm == model_id else cm
-                        for cm in old_meta.context_models
-                    )
-                    new_meta = replace(old_meta, context_models=new_context_models)
-
-                    object.__setattr__(agg, "meta", new_meta)
-
-                    meta_dict = new_meta.to_dict()
-                    meta_dict.pop("uid")
-                    self.__agg_repo.metadata_index.upsert(
-                        TABLE_AGGREGATES,
-                        uid=uid,
-                        **meta_dict,
-                    )
-
+                try:
+                    instances.rename(instance.instance_uid, new_model_id)
+                except UniqueConstraintError as exc:
+                    raise ModelAlreadyExistsError(
+                        f"Model '{new_model_id}' already exists"
+                    ) from exc
+            self.__agg_repo.refresh_names()
+            self.__param_repo.refresh_names()
             self.__session_or_context._field_cache.invalidate()
 
             logger.info("Renamed model '%s' to '%s'", model_id, new_model_id)
 
     def erase(
         self,
-        *model_ids: str,
+        *model_ids: str | tuple[str, int],
         erase_all: bool = False,
     ) -> EraseSummary:
-        """Erase all parameters and results for specified models.
+        """Erase selected parameters and the aggregates that reference them.
 
-        Removes model parameters from both memory and persistent storage.
-        Use with caution as this operation cannot be undone.
+        The catalog tombstones their fields. A model remains registered while
+        any checkpoint still has parameters.
 
         Args:
-            *model_ids: Model IDs to erase. Required if erase_all is False.
-            erase_all: If True, erases all models. model_ids must be empty.
+            *model_ids: Exact model names or (model name, step) pairs to erase.
+            erase_all: Select every model visible in this scope. Pass no model IDs.
 
         Returns:
-            An EraseSummary naming the erased models and the number of
-            parameter entries removed.
+            An EraseSummary naming the affected models and counting removed parameters.
 
         Raises:
             ValueError: If neither model_ids nor erase_all is specified,
@@ -236,71 +291,80 @@ class ModelsNamespace:
                     msg = "Cannot specify both model_ids and erase_all=True"
                 raise ValueError(msg)
 
-            if erase_all:
-                model_ids = tuple(self.list())
+            global_scope = isinstance(self.__session_or_context, Session)
+            with self.__param_repo:
+                if erase_all:
+                    model_ids = tuple(self.list())
+                if global_scope:
+                    params = self.__param_repo.create_view()
+                else:
+                    params = self.__session_or_context._param_filter_context
 
-            if isinstance(self.__session_or_context, Session):
-                params = self.__param_repo.create_view()
-                aggs = self.__agg_repo.create_view()
-            else:
-                params = self.__session_or_context._param_filter_context
-                aggs = self.__session_or_context._agg_filter_context
+                selection = resolve_models(
+                    params,
+                    self.__param_repo.instances,
+                    model_ids,
+                    allow_empty_instances=global_scope,
+                )
+                selected = params.filter_by_coordinates(list(selection.coordinates))
+                erased_uids = selected.list_uids()
+                aggregate_uids = self.__agg_repo.referencing(erased_uids)
+                self.__param_repo.erase_values(erased_uids)
+                self.__agg_repo.erase_values(aggregate_uids)
+                self.__agg_repo.remove_membership(aggregate_uids)
+                removed = self.__param_repo.remove_membership(erased_uids)
+                self.__param_repo.instances.prune_empty(
+                    selection.coordinates, selection.instances
+                )
 
-            erased_uids: list[str] = []
-            for model_id in model_ids:
-                model_params = params.filter_by_model_id(model_id)
-
-                if not model_params:
-                    msg = f"Model '{model_id}' not found"
-                    raise ModelNotFoundError(msg)
-
-                model_aggs = aggs.filter_by_context_models(model_id)
-
-                erased_uids.extend(model_params.list_uids())
-                model_params.clear(erase=True)
-                if model_aggs:
-                    model_aggs.clear(erase=True)
-
-                logger.info("Erased model '%s'", model_id)
-
+            self.__param_repo.refresh_names()
+            self.__agg_repo.refresh_names()
             self.__session_or_context._field_cache.remove_uids(erased_uids)
+            return EraseSummary(models=selection.names, affected_uids=removed)
 
-            return EraseSummary(models=tuple(model_ids), affected_uids=len(erased_uids))
+    @overload
+    def list(self, *, layout: Literal["names"] = "names") -> list[str]: ...
 
-    def list(self) -> list[str]:
-        """List all model IDs currently in the session.
+    @overload
+    def list(self, *, layout: Literal["coordinates"]) -> list[tuple[str, int]]: ...
 
-        Returns:
-            Sorted list of unique model IDs present in the session.
+    @overload
+    def list(self, *, layout: Literal["grouped"]) -> dict[str, list[int]]: ...
+
+    def list(
+        self, *, layout: Literal["names", "coordinates", "grouped"] = "names"
+    ) -> list[str] | list[tuple[str, int]] | dict[str, list[int]]:
+        """List model names or their training checkpoints within the current scope.
+
+        Args:
+            layout: ``"names"`` returns sorted model names. ``"coordinates"`` returns
+                (name, step) pairs sorted by name and numeric step. ``"grouped"``
+                maps each model name to its ordered list of steps.
         """
+        if layout not in {"names", "coordinates", "grouped"}:
+            raise ValueError("layout must be 'names', 'coordinates' or 'grouped'")
         with self.__session_or_context:
-            if isinstance(self.__session_or_context, Session):
-                params = self.__param_repo.create_view()
-            else:
-                params = self.__session_or_context._param_filter_context
-            model_ids = {param.meta.model_id for param in params}
-            return sorted(model_ids)
-
-    def __build_extractor_overrides(
-        self,
-        model_id: str | None,
-        parameter_overrides: dict[str, ParameterOverrides] | None,
-    ) -> ExtractorOverrides:
-        extractor_overrides_kwargs: dict[str, Any] = {}
-
-        if model_id:
-            check_identifier(model_id, kind="model id")
-
-            params = self.__param_repo.create_view()
-            model_params = params.filter_by_model_id(model_id)
-
-            if model_params:
-                msg = f"Model with uid {model_id} already exists"
-                raise ModelAlreadyExistsError(msg)
-
-            extractor_overrides_kwargs["model_id"] = model_id
-
-        if parameter_overrides:
-            extractor_overrides_kwargs["parameter_overrides"] = parameter_overrides
-
-        return ExtractorOverrides(**extractor_overrides_kwargs)
+            global_scope = isinstance(self.__session_or_context, Session)
+            if global_scope and layout == "names":
+                return self.__param_repo.instances.names()
+            params = (
+                self.__param_repo.create_view()
+                if global_scope
+                else self.__session_or_context._param_filter_context
+            )
+            coordinates = params.coordinates()
+            instances = self.__param_repo.instances
+            if layout == "names":
+                return instances.names(list({uid for uid, _ in coordinates}))
+            names = {
+                instance.instance_uid: instance.name for instance in instances.list()
+            }
+            ordered = sorted((names[uid], step) for uid, step in coordinates)
+            if layout == "coordinates":
+                return ordered
+            grouped: dict[str, list[int]] = (
+                {name: [] for name in sorted(names.values())} if global_scope else {}
+            )
+            for name, step in ordered:
+                grouped.setdefault(name, []).append(step)
+            return grouped

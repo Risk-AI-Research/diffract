@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from .ordering import as_is
 
 if TYPE_CHECKING:
+    from diffract.session.resolver import FieldSelector
+
     from .ordering import Ordering
 
 
@@ -14,6 +16,7 @@ class Entry(TypedDict, total=False):
     """Single data entry from session results."""
 
     fields: dict[str, Any]
+    field_contexts: dict[str, dict[str, Any]]
 
 
 class DataType(Enum):
@@ -57,11 +60,11 @@ class FieldRef:
     """Reference to a data field with optional ordering.
 
     Attributes:
-        field: Name of the field to reference.
+        field: Field name or structured selector.
         ordering: How to order values of this field. Defaults to AS_IS (no reordering).
     """
 
-    field: str
+    field: str | FieldSelector
     data_type: DataType | None = field(default=None)
     data_shape: DataShape | None = field(default=None)
     ordering: Ordering = field(default_factory=as_is)
@@ -82,6 +85,7 @@ class EntryContext:
     fields: dict[str, Any]
     model_id: Any
     parameter_name: Any
+    field_contexts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_entry(cls, entry: Entry) -> EntryContext:
@@ -93,6 +97,7 @@ class EntryContext:
             )
         return cls(
             fields=entry_fields,
+            field_contexts=entry.get("field_contexts", {}),
             model_id=entry_fields.get("model_id"),
             parameter_name=entry_fields.get("name"),
         )

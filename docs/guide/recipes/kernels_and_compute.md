@@ -40,41 +40,68 @@ Kernel configuration is process-global: the registry is a module-level singleton
 by all sessions in the process. Configuration set in one session applies to every other
 session and resets only when the interpreter restarts.
 
+### Versioning custom kernels
+
+Set the implementation revision with `@session.compute.kernel(version="2")`.
+The default revision is `"1"`. Bump the revision when behavior changes, including
+changes to an existing default that affect results.
+
+Use JSON-compatible configuration for a stable fingerprint. Supported values
+include finite numbers, booleans, strings, lists, string-keyed dictionaries, and
+`None`. Dictionary order is ignored, while numeric types such as `1` and `1.0`
+retain their distinct representations. Explicitly setting a value to its default
+has the same fingerprint as leaving it at that default.
+
 ### Reconfiguring after results are stored
 
-Configuration takes effect when a kernel executes; changing it does **not** invalidate
-results that are already stored. `apply` selects work by field presence alone: a
-parameter that already has the kernel's output fields is skipped, without comparing the
-stored values to the current configuration (stored values do not record the
-configuration they were computed with). Re-applying after `configure_kernel` is
-therefore a silent no-op that leaves the previous values in place. To recompute under
-the new configuration, erase the stored fields first:
+`apply` checks the effective configuration and the change sequences of its direct
+inputs before reusing stored results. Use `results.status(field)` to inspect the same
+checks against the current metadata. The report contains one entry per field and
+identity in scope, with a `status` of `fresh`, `stale`, or `never computed`.
 
 ```python
+import numpy as np
+
+from diffract import Session
+
+session = Session(profile="ram")
 with session:
+    session.models.add({"layer.weight": np.diag([1.0, 0.2])}, model_id="example")
     session.compute.configure_kernel("hard_rank", rtol=1e-9)
-    session.compute.apply("hard_rank")  # computes with rtol=1e-9
+    session.compute.apply("hard_rank")
 
     session.compute.configure_kernel("hard_rank", rtol=0.5)
-    session.compute.apply("hard_rank")  # no-op: "hard_rank" is already stored
-
-    session.results.erase("hard_rank")
-    session.compute.apply("hard_rank")  # recomputes with rtol=0.5
+    (entry,) = session.results.status("hard_rank")
+    print(entry.status, entry.reason)  # stale config key rtol changed
+    session.compute.apply("hard_rank")
 ```
 
-Two caveats when erasing:
+An inherited result eligible for verification reports `fresh` with reason
+`pre-provenance`. The first `apply` records the effective configuration for that
+output group while preserving its payload. SVD producers recompute inherited
+spectra and vectors whose arithmetic is unknown. See
+[SVD precision and execution records](../../reference/metrics/spectral.md#precision-and-execution-records).
 
-- **Erase a multi-output kernel's fields as a group.** A parameter is selected for
-  computation only when *all* of a kernel's output fields are absent. After erasing
-  only `weights_svals`, `apply` cannot restore it, because the sibling fields written
-  by the same kernel still exist. Erase the whole produce group together:
-  `erase("weights_lsvs", "weights_svals", "weights_rsvs")`.
-- **Stale dependents are not erased for you.** Fields computed from the reconfigured
-  kernel's outputs keep their stored values. Pass `erase_dependent_also=True` to also
-  erase every stored field downstream of the ones you name.
+Use `session.compute.apply("hard_rank", recompute=True)` to run the producing
+kernel even when its stored result is fresh. For a multi-output kernel, the
+call runs the full output group in the active session scope. Kernels needed
+only as dependencies still follow the freshness check. The returned
+`ApplySummary.forced_fields` lists the fields produced by forced runs.
 
-When possible, configure kernels before the first `apply`; treat reconfiguration as an
-explicit erase-then-apply cycle.
+### Memory used by SVD
+
+The SVD kernels load one parameter's inputs at a time and write results in
+batches. For CPU execution, Diffract estimates the extra working memory
+from the matrix dimensions and requested factors. It budgets eight bytes per
+element for real inputs. With economy vectors, the allowance includes a term
+quadratic in the shorter dimension. The estimate covers workspace, copies
+and output sorting. See {py:func}`~diffract.core.compute.extensions.svd_workspace.estimate_svd_workspace_bytes`.
+
+When available host RAM can be measured, the CPU SVD raises an error before
+calling LAPACK if the estimate exceeds 80% of it. On Linux, the budget also
+considers detected cgroup v2 limits. If the measurement is unavailable,
+Diffract logs a warning and continues. Each check is a snapshot of available
+memory, so other processes can still change memory pressure during a run.
 
 ## Dependency resolution
 
@@ -108,13 +135,13 @@ Here, `esd` is a required field; `rtol` is configurable via
 
 Kernels operate at one of three levels:
 
-| Level         | Scope                                | Example                                         |
-| ------------- | ------------------------------------ | ----------------------------------------------- |
-| `PARAMETER`   | Per parameter                        | `frob_norm` — Frobenius norm of each layer      |
-| `IN_MODEL`    | Per model (aggregates by `model_id`) | `param_norm` — sum of squared norms             |
-| `CROSS_MODEL` | Per parameter name across models     | `l_overlap` — compare layers across checkpoints |
+| Level         | Scope                                           | Example                                             |
+| ------------- | ----------------------------------------------- | --------------------------------------------------- |
+| `PARAMETER`   | Per parameter                                   | `frob_norm` — Frobenius norm of each layer          |
+| `IN_MODEL`    | Per model instance and training step            | `param_norm` — sum of squared norms                 |
+| `CROSS_MODEL` | Per tensor name across the selected checkpoints | `l_overlap` compares two left singular-vector bases |
 
-### Cross-model kernels compare exactly two models
+### Pair kernels compare two model checkpoints
 
 The alignment family — `l_overlap`, `r_overlap`, and the agreement metrics derived
 from them (`l_agreement`, `max_l_agreement`, `avg_l_agreement`,
@@ -128,25 +155,47 @@ with session:
     pair.compute.apply("l_agreement")  # l_overlap is resolved automatically
 ```
 
-Applying a pairwise kernel with any other number of models in scope raises
+Pair exports identify each operand with `model_source`, `step_source`,
+`model_target`, and `step_target`. For overlap, rows index the source
+basis and columns index the target basis. Swapping the pair transposes
+the matrix. To compare two checkpoints of one model, select its name and
+two steps with `session.filter(model_ids=["net"], steps=[0, 100])`. The following table applies to both the left and right bases.
+
+| Quantity                          | Effect of reversing the operands |
+| --------------------------------- | -------------------------------- |
+| Overlap matrix                    | Transposes the matrix            |
+| Diagonal agreement and its mean   | Preserves the value              |
+| Best-match agreement and its mean | Takes maxima over the other axis |
+
+In a session containing steps 0, 1 and 2 of one model, request a single
+direction explicitly:
+
+```python
+session.compute.apply("l_overlap", pairs=[(("net", 0), ("net", 1))])
+```
+
+For one matched weight this computes one directed overlap, from 0 to 1. A
+symmetric field such as `l_agreement` shares one stored value across both
+orientations. Wide aggregate exports show its two orientations. In long
+format each exported orientation has two member rows. Exporting both orientations
+of this symmetric measurement gives four rows sharing one `aggregate_uid`.
+
+Without `pairs`, a scope containing fewer or more than two checkpoints raises
 `ScopeValidationError` before any work runs, naming the scope and the fix:
 
 ```python
 from diffract.session import ScopeValidationError
 
-with session:  # three models in scope
+with session:  # three checkpoints in scope
     try:
         session.compute.apply("l_overlap")
     except ScopeValidationError as err:
         print(err)
-        # Cannot produce 'l_overlap': it is a binary cross-model kernel that
-        # requires exactly two models in scope, but the current scope has 3:
-        # ['a', 'b', 'c']. Restrict the scope to a model pair, e.g.
-        # session.filter(model_ids=['a', 'b']).compute.apply('l_overlap').
+        # The error lists the selected coordinates and suggests a pair filter.
 ```
 
 The requirement is transitive: `l_agreement` reads `l_overlap`, so requesting
-`l_agreement` from a non-pair scope raises the same error and names the offending
+`l_agreement` from a non-pair scope without explicit pairs raises the same error and names the offending
 dependency (`l_overlap`).
 
 To compare more than two models, apply the kernel once per pair:
@@ -165,14 +214,18 @@ mathematics of the overlap and agreement fields.
 
 ### Contextual field names
 
-Aggregated kernels write results with a deterministic suffix to avoid collisions:
+A migrated pair with unknown direction yields one row marked
+`direction_unknown`. A role-qualified selector excludes that row.
+
+The combined export displays aggregate fields using their model and parameter
+names. For pairs it also displays the source and target checkpoints:
 
 ```
-some_metric@models[m1,m2]@params[layer.0.weight]
+max_l_agreement [source=m1 (step 0) / w, target=m2 (step 0) / w]
 ```
 
-When you call `results.export_aggregates("some_metric", ...)`, Diffract matches both the
-base name and contextual variants.
+Request the base field, e.g. `results.export_aggregates("max_l_agreement")`,
+for records with separate model and checkpoint columns.
 
 ## Kernel outputs
 
@@ -190,11 +243,11 @@ This allows one kernel to produce multiple fields in a single pass.
 
 For per-parameter kernels:
 
-1. Filter to parameters missing the target fields
+1. Select parameters whose output group needs computation
 1. Group the pending parameters into **chunks** sized by an approximate read budget,
    derived from the cache manager's available bytes with headroom
-1. For each chunk: **prefetch** the required input fields into memory, then execute the
-   kernel on every parameter in the chunk
+1. For each chunk, prefetch inputs for regular kernels. Streaming kernels read one
+   parameter's inputs when it is executed
 
 Chunk sizes are estimated from stored field metadata (shape and dtype), so large fields
 such as weight matrices produce small chunks and scalar fields produce large ones.
